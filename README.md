@@ -59,12 +59,18 @@ Each speaker gets their own enrollment directory with audio samples. Record 5–
 
 ```bash
 # Create enrollment directory for a speaker (first run creates the folder)
-docker compose run --rm voice-match python -m scripts.enroll --speaker john
+docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker john
 ```
 
 Record audio samples and place them in `data/enrollment/john/`:
 
 **Linux:**
+
+List available recording devices:
+
+```bash
+arecord -l
+```
 
 ```bash
 for i in $(seq 1 5); do
@@ -75,6 +81,14 @@ done
 ```
 
 **macOS:**
+
+List available audio devices:
+
+```bash
+sox --help-device
+# Or using system_profiler:
+system_profiler SPAudioDataType
+```
 
 ```bash
 for i in $(seq 1 5); do
@@ -88,40 +102,48 @@ done
 
 **Windows (PowerShell):**
 
+Use the included recording script — it will list your microphones, let you pick one, and guide you through recording:
+
 ```powershell
-# Requires ffmpeg (https://ffmpeg.org/download.html)
-for ($i = 1; $i -le 5; $i++) {
-  Write-Host "Sample $i — speak naturally for 5 seconds..."
-  ffmpeg -f dshow -i audio="Microphone" -ar 16000 -ac 1 -t 5 "data/enrollment/john/sample_$i.wav" -y
-}
+.\tools\record_samples.ps1 -Speaker john
 ```
 
 > Requires [ffmpeg](https://ffmpeg.org/download.html): `winget install ffmpeg`
 
 Alternatively, use any voice recorder app on your phone or computer and save the files as WAV. The enrollment script handles resampling automatically, so any sample rate or channel count will work.
 
+**Example phrases to record** (one per sample, speak naturally):
+
+1. "Hey, turn on the living room lights and set them to fifty percent"
+2. "What's the weather going to be like tomorrow morning"
+3. "Set a timer for ten minutes and remind me to check the oven"
+4. "Play some jazz music in the kitchen please"
+5. "Good morning, what's on my calendar for today"
+6. "Lock the front door and turn off all the lights downstairs"
+7. "What's the temperature inside the house right now"
+
+> **Tip:** Vary your distance from the mic, volume, and phrasing across samples. Use your normal everyday voice — don't whisper or shout. The more variety, the more robust your voiceprint will be.
+
 Then run enrollment again to generate the voiceprint:
 
 ```bash
-docker compose run --rm voice-match python -m scripts.enroll --speaker john
+docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker john
 ```
 
 Repeat for additional speakers:
 
 ```bash
-docker compose run --rm voice-match python -m scripts.enroll --speaker jane
+docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker jane
 ```
-
-> **Tip:** Vary each speaker's samples — different volumes, distances from the mic, and phrases. This creates a more robust voiceprint. Do not whisper or shout; use a normal speaking voice.
 
 Manage enrolled speakers:
 
 ```bash
 # List all enrolled speakers
-docker compose run --rm voice-match python -m scripts.enroll --list
+docker compose run --rm --entrypoint python voice-match -m scripts.enroll --list
 
 # Delete a speaker
-docker compose run --rm voice-match python -m scripts.enroll --delete john
+docker compose run --rm --entrypoint python voice-match -m scripts.enroll --delete john
 ```
 
 ### 4. Start the Service
@@ -179,7 +201,7 @@ WARNING: Speaker rejected (similarity=0.1847, threshold=0.45)
 To update a speaker's voiceprint, add or replace WAV files in `data/enrollment/<n>/` and re-run:
 
 ```bash
-docker compose run --rm voice-match python -m scripts.enroll --speaker john
+docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker john
 ```
 
 Then restart the service:

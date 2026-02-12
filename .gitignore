@@ -1,7 +1,5 @@
 # Data
-data/voiceprints/*.npy
-data/enrollment/*/
-data/models/
+data/
 
 # Python
 __pycache__/
