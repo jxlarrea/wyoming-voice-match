@@ -15,5 +15,5 @@ services:
       - THRESHOLD=0.45
       - LISTEN_URI=tcp://0.0.0.0:10350
       - DEVICE=cpu
-      - MODEL_DIR=/data/models
+      - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG

@@ -49,7 +49,7 @@ Edit `docker-compose.yml` and set your upstream ASR URI and preferences in the `
       - THRESHOLD=0.45
       - LISTEN_URI=tcp://0.0.0.0:10350
       - DEVICE=cuda
-      - MODEL_DIR=/data/models
+      - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
 ```
 
@@ -172,7 +172,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `THRESHOLD` | `0.45` | Cosine similarity threshold for speaker verification (0.0–1.0) |
 | `LISTEN_URI` | `tcp://0.0.0.0:10350` | URI this service listens on |
 | `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`) |
-| `MODEL_DIR` | `/data/models` | Directory to cache the ECAPA-TDNN model (persisted via volume) |
+| `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |
 | `LOG_LEVEL` | `DEBUG` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 ### Tuning the Threshold
