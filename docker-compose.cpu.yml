@@ -15,4 +15,5 @@ services:
       - THRESHOLD=0.45
       - LISTEN_URI=tcp://0.0.0.0:10350
       - DEVICE=cpu
+      - MODEL_DIR=/data/models
       - LOG_LEVEL=DEBUG

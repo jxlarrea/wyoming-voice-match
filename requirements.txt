@@ -1,5 +1,4 @@
 wyoming==1.8.0
 speechbrain>=1.0.0
-torchaudio>=2.1.0
 scipy>=1.11.0
 numpy>=1.24.0
