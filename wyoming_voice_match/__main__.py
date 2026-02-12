@@ -129,6 +129,12 @@ async def main() -> None:
                         name="voice-match-proxy",
                         description="ECAPA-TDNN speaker gate → upstream ASR",
                         languages=["en"],
+                        attribution=Attribution(
+                            name="Wyoming Voice Match",
+                            url="https://github.com/jxlarrea/wyoming-voice-match",
+                        ),
+                        installed=True,
+                        version=__version__,
                     )
                 ],
             )
