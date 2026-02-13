@@ -1,9 +1,6 @@
 services:
-  voice-match:
-    build:
-      context: .
-      dockerfile: Dockerfile.cpu
-    image: wyoming-voice-match:cpu
+  wyoming-voice-match:
+    image: jxlarrea/wyoming-voice-match:cpu
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:

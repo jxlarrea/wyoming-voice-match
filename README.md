@@ -50,18 +50,27 @@ Wyoming Voice Match sits between Home Assistant and your ASR (speech-to-text) se
 
 ## Quick Start
 
-### 1. Clone the Repository
+### 1. Create a Project Directory
 
 ```bash
-git clone https://github.com/jxlarrea/wyoming-voice-match.git
-cd wyoming-voice-match
+mkdir wyoming-voice-match && cd wyoming-voice-match
+mkdir -p data/enrollment
 ```
 
-### 2. Configure
+### 2. Create `docker-compose.yml`
 
-Edit `docker-compose.yml` and set your upstream ASR URI and preferences in the `environment` section:
+**GPU (recommended):**
 
 ```yaml
+services:
+  wyoming-voice-match:
+    image: jxlarrea/wyoming-voice-match:latest
+    container_name: wyoming-voice-match
+    restart: unless-stopped
+    ports:
+      - "10350:10350"
+    volumes:
+      - ./data:/data
     environment:
       - UPSTREAM_URI=tcp://wyoming-faster-whisper:10300
       - VERIFY_THRESHOLD=0.20
@@ -69,29 +78,49 @@ Edit `docker-compose.yml` and set your upstream ASR URI and preferences in the `
       - DEVICE=cuda
       - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 ```
+
+**CPU-only:**
+
+```yaml
+services:
+  wyoming-voice-match:
+    image: jxlarrea/wyoming-voice-match:cpu
+    container_name: wyoming-voice-match
+    restart: unless-stopped
+    ports:
+      - "10350:10350"
+    volumes:
+      - ./data:/data
+    environment:
+      - UPSTREAM_URI=tcp://wyoming-faster-whisper:10300
+      - VERIFY_THRESHOLD=0.20
+      - LISTEN_URI=tcp://0.0.0.0:10350
+      - DEVICE=cpu
+      - HF_HOME=/data/hf_cache
+      - LOG_LEVEL=DEBUG
+```
+
+Update `UPSTREAM_URI` to point to your ASR service.
 
 ### 3. Enroll Your Voice
 
-Each speaker gets their own enrollment directory with audio samples. Record at least 30 WAV files per person, 5 seconds each, speaking naturally at varied volumes and distances.
-
-```bash
-# Create enrollment directory for a speaker (first run creates the folder)
-docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker john
-```
-
-Record audio samples and place them in `data/enrollment/john/`:
-
-**Linux:**
-
-List available recording devices:
-
-```bash
-arecord -l
-```
+Record at least 30 WAV files per speaker, 5 seconds each, speaking naturally at varied volumes and distances. Place them in `data/enrollment/<speaker>/`:
 
 ```bash
 mkdir -p data/enrollment/john
+```
+
+**Linux:**
+
+```bash
 for i in $(seq 1 30); do
   echo "Sample $i — speak naturally for 5 seconds..."
   arecord -r 16000 -c 1 -f S16_LE -d 5 "data/enrollment/john/john_$(date +%Y%m%d_%H%M%S).wav"
@@ -101,16 +130,7 @@ done
 
 **macOS:**
 
-List available audio devices:
-
 ```bash
-sox --help-device
-# Or using system_profiler:
-system_profiler SPAudioDataType
-```
-
-```bash
-mkdir -p data/enrollment/john
 for i in $(seq 1 30); do
   echo "Sample $i — speak naturally for 5 seconds..."
   sox -d -r 16000 -c 1 -b 16 "data/enrollment/john/john_$(date +%Y%m%d_%H%M%S).wav" trim 0 5
@@ -122,10 +142,10 @@ done
 
 **Windows (PowerShell):**
 
-Use the included recording script — it will list your microphones, let you pick one, and guide you through recording:
+Download the [recording script](https://raw.githubusercontent.com/jxlarrea/wyoming-voice-match/main/tools/record_samples.ps1) and run it — it will list your microphones, let you pick one, and guide you through recording:
 
 ```powershell
-.\tools\record_samples.ps1 -Speaker john
+.\record_samples.ps1 -Speaker john
 ```
 
 > Requires [ffmpeg](https://ffmpeg.org/download.html): `winget install ffmpeg`
@@ -140,28 +160,28 @@ Alternatively, use any voice recorder app on your phone or computer and save the
 4. "Lock the front door and turn off all the lights downstairs"
 5. "What's the temperature inside the house right now"
 
-> **Tip:** The best results come from enrolling with **30 samples** at varied volumes and distances. The Windows recording script (`.\tools\record_samples.ps1`) will prompt you through all 30 with suggested phrases. On Linux/macOS, adjust the loop count as needed. The more variety in your samples, the more robust your voiceprint will be.
+> **Tip:** The best results come from enrolling with **30 samples** at varied volumes and distances. The more variety in your samples, the more robust your voiceprint will be.
 
-Then run enrollment again to generate the voiceprint:
+Generate the voiceprint:
 
 ```bash
-docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker john
+docker compose run --rm wyoming-voice-match python -m scripts.enroll --speaker john
 ```
 
 Repeat for additional speakers:
 
 ```bash
-docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker jane
+docker compose run --rm wyoming-voice-match python -m scripts.enroll --speaker jane
 ```
 
 Manage enrolled speakers:
 
 ```bash
 # List all enrolled speakers
-docker compose run --rm --entrypoint python voice-match -m scripts.enroll --list
+docker compose run --rm wyoming-voice-match python -m scripts.enroll --list
 
 # Delete a speaker
-docker compose run --rm --entrypoint python voice-match -m scripts.enroll --delete john
+docker compose run --rm wyoming-voice-match python -m scripts.enroll --delete john
 ```
 
 ### 4. Start the Service
@@ -213,7 +233,7 @@ The `VERIFY_THRESHOLD` environment variable controls how strict speaker matching
 Start with debug logging enabled and observe the similarity scores:
 
 ```bash
-docker compose logs -f voice-match
+docker compose logs -f wyoming-voice-match
 ```
 
 You'll see output like:
@@ -249,33 +269,21 @@ With these settings, the proxy will verify your identity and transcribe your com
 
 To update a speaker's voiceprint, add more WAV files to `data/enrollment/<speaker>/` and re-run enrollment. The script processes all WAV files in the folder to generate an updated voiceprint.
 
-**Adding more samples on Windows:**
-
-Simply run the recording script again — new files are timestamped and won't overwrite existing ones:
-
-```powershell
-.\tools\record_samples.ps1 -Speaker john
-```
-
-**Adding samples manually:**
-
-Copy additional WAV files (from your phone, another computer, etc.) into the speaker's enrollment folder. Any filename and format will work.
-
-Then re-run enrollment and restart:
+Record additional samples using the same method as initial enrollment, then re-run:
 
 ```bash
-docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker john
-docker compose restart voice-match
+docker compose run --rm wyoming-voice-match python -m scripts.enroll --speaker john
+docker compose restart wyoming-voice-match
 ```
 
 ## Docker Compose Integration
 
-If you're running other Wyoming services, you can add this to your existing `docker-compose.yml`:
+If you're running other Wyoming services, you can add Voice Match to your existing `docker-compose.yml`:
 
 ```yaml
 services:
-  voice-match:
-    build: ./wyoming-voice-match
+  wyoming-voice-match:
+    image: jxlarrea/wyoming-voice-match:latest
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:
@@ -295,7 +303,7 @@ services:
               capabilities: [gpu]
 ```
 
-For CPU-only usage, use `docker-compose.cpu.yml` instead, or remove the `deploy` section and set `DEVICE=cpu`.
+For CPU-only usage, replace the image tag with `jxlarrea/wyoming-voice-match:cpu`, remove the `deploy` section, and set `DEVICE=cpu`.
 
 ## Performance
 

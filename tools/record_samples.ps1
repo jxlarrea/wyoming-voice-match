@@ -157,4 +157,4 @@ for ($i = 0; $i -lt $Samples; $i++) {
 
 Write-Host "`nDone! Recorded $Samples samples in: $enrollDir" -ForegroundColor Cyan
 Write-Host "Now run enrollment to generate the voiceprint:" -ForegroundColor Cyan
-Write-Host "  docker compose run --rm --entrypoint python voice-match -m scripts.enroll --speaker $Speaker" -ForegroundColor White
+Write-Host "  docker compose run --rm wyoming-voice-match python -m scripts.enroll --speaker $Speaker" -ForegroundColor White
