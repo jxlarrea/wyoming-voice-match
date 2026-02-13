@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from wyoming.asr import Transcribe, Transcript
@@ -11,7 +12,7 @@ from wyoming.event import Event
 from wyoming.info import Describe, Info
 from wyoming.server import AsyncEventHandler
 
-from .verify import SpeakerVerifier
+from .verify import SpeakerVerifier, VerificationResult
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,9 +23,9 @@ _MODEL_LOCK = asyncio.Lock()
 class SpeakerVerifyHandler(AsyncEventHandler):
     """Wyoming ASR handler that gates transcription on speaker identity.
 
-    Buffers incoming audio, verifies the speaker against the enrolled
-    voiceprint, and either forwards to the upstream ASR or returns an
-    empty transcript.
+    Runs speaker verification early (as soon as enough audio is buffered)
+    rather than waiting for AudioStop. This reduces perceived latency
+    when the upstream VAD keeps the stream open due to background noise.
     """
 
     def __init__(
@@ -47,6 +48,10 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self._audio_width: int = 2
         self._audio_channels: int = 1
         self._language: Optional[str] = None
+        self._verify_task: Optional[asyncio.Task] = None
+        self._verify_result: Optional[VerificationResult] = None
+        self._verify_started: bool = False
+        self._stream_start_time: Optional[float] = None
 
     async def handle_event(self, event: Event) -> bool:
         """Process a single Wyoming event.
@@ -64,46 +69,53 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             self._language = transcribe.language
             return True
 
-        # Audio stream start — reset buffer
+        # Audio stream start — reset state
         if AudioStart.is_type(event.type):
             self._audio_buffer = bytes()
+            self._verify_task = None
+            self._verify_result = None
+            self._verify_started = False
+            self._stream_start_time = time.monotonic()
             return True
 
-        # Audio data — accumulate
+        # Audio data — accumulate and trigger early verification
         if AudioChunk.is_type(event.type):
             chunk = AudioChunk.from_event(event)
             self._audio_rate = chunk.rate
             self._audio_width = chunk.width
             self._audio_channels = chunk.channels
             self._audio_buffer += chunk.audio
+
+            # Trigger verification once we have enough audio
+            if not self._verify_started:
+                bytes_per_second = (
+                    self._audio_rate * self._audio_width * self._audio_channels
+                )
+                buffered_seconds = len(self._audio_buffer) / bytes_per_second
+
+                if buffered_seconds >= self.verifier.max_verify_seconds:
+                    self._verify_started = True
+                    _LOGGER.debug(
+                        "Early verify: %.1fs buffered, starting verification",
+                        buffered_seconds,
+                    )
+                    # Take a snapshot of the buffer for verification
+                    verify_audio = bytes(self._audio_buffer)
+                    self._verify_task = asyncio.create_task(
+                        self._run_verification(verify_audio)
+                    )
+
             return True
 
-        # Audio stream end — verify speaker and optionally forward
+        # Audio stream end — use early result or verify now
         if AudioStop.is_type(event.type):
             await self._process_audio()
             return True
 
         return True
 
-    async def _process_audio(self) -> None:
-        """Verify the speaker and forward audio or reject."""
-        audio_bytes = self._audio_buffer
-        audio_duration = len(audio_bytes) / (
-            self._audio_rate * self._audio_width * self._audio_channels
-        )
-
-        if len(audio_bytes) == 0:
-            _LOGGER.debug("Empty audio buffer, returning empty transcript")
-            await self.write_event(Transcript(text="").event())
-            return
-
-        _LOGGER.debug(
-            "Processing %.1fs of audio (%d bytes)",
-            audio_duration,
-            len(audio_bytes),
-        )
-
-        # Run speaker verification (with lock for thread safety)
+    async def _run_verification(self, audio_bytes: bytes) -> VerificationResult:
+        """Run speaker verification in background with lock."""
         async with _MODEL_LOCK:
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
@@ -112,6 +124,57 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 audio_bytes,
                 self._audio_rate,
             )
+        self._verify_result = result
+        return result
+
+    async def _process_audio(self) -> None:
+        """Verify the speaker and forward audio or reject."""
+        audio_bytes = self._audio_buffer
+        bytes_per_second = (
+            self._audio_rate * self._audio_width * self._audio_channels
+        )
+        audio_duration = len(audio_bytes) / bytes_per_second
+
+        if len(audio_bytes) == 0:
+            _LOGGER.debug("Empty audio buffer, returning empty transcript")
+            await self.write_event(Transcript(text="").event())
+            return
+
+        stream_elapsed = 0.0
+        if self._stream_start_time is not None:
+            stream_elapsed = (time.monotonic() - self._stream_start_time) * 1000
+
+        _LOGGER.debug(
+            "AudioStop received: %.1fs of audio (%d bytes), "
+            "stream duration: %.0fms",
+            audio_duration,
+            len(audio_bytes),
+            stream_elapsed,
+        )
+
+        # Wait for early verification if it was started, otherwise verify now
+        if self._verify_task is not None:
+            _LOGGER.debug("Waiting for early verification result...")
+            wait_start = time.monotonic()
+            result = await self._verify_task
+            wait_elapsed = (time.monotonic() - wait_start) * 1000
+            _LOGGER.debug(
+                "Early verification result ready (waited %.0fms)",
+                wait_elapsed,
+            )
+        else:
+            _LOGGER.debug(
+                "No early verification (only %.1fs buffered), verifying now",
+                audio_duration,
+            )
+            async with _MODEL_LOCK:
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    self.verifier.verify,
+                    audio_bytes,
+                    self._audio_rate,
+                )
 
         if result.is_match:
             _LOGGER.info(
@@ -128,15 +191,12 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             # Use the detected speech segment for ASR to avoid sending
             # background noise (e.g., TV audio) to the transcription service.
             # Fall back to trimming to max_verify_seconds if no segment detected.
-            bytes_per_second = (
-                self._audio_rate * self._audio_width * self._audio_channels
-            )
             if result.speech_audio is not None:
                 asr_audio = result.speech_audio
                 _LOGGER.debug(
                     "Forwarding speech segment to ASR (%.1fs of %.1fs)",
                     len(asr_audio) / bytes_per_second,
-                    len(audio_bytes) / bytes_per_second,
+                    audio_duration,
                 )
             else:
                 max_asr_bytes = int(self.verifier.max_verify_seconds * bytes_per_second)
@@ -144,7 +204,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                     asr_audio = audio_bytes[:max_asr_bytes]
                     _LOGGER.debug(
                         "Trimmed audio from %.1fs to %.1fs for ASR",
-                        len(audio_bytes) / bytes_per_second,
+                        audio_duration,
                         len(asr_audio) / bytes_per_second,
                     )
                 else:
