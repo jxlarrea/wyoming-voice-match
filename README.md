@@ -64,7 +64,7 @@ mkdir -p data/enrollment
 ```yaml
 services:
   wyoming-voice-match:
-    image: jxlarrea/wyoming-voice-match:latest
+    image: ghcr.io/jxlarrea/wyoming-voice-match:latest
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:
@@ -91,7 +91,7 @@ services:
 ```yaml
 services:
   wyoming-voice-match:
-    image: jxlarrea/wyoming-voice-match:cpu
+    image: ghcr.io/jxlarrea/wyoming-voice-match:cpu
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:
@@ -205,7 +205,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | Variable | Default | Description |
 |---|---|---|
 | `UPSTREAM_URI` | `tcp://localhost:10300` | Wyoming URI of your real ASR service |
-| `VERIFY_THRESHOLD` | `0.20` | Cosine similarity threshold for speaker verification (0.0–1.0) |
+| `VERIFY_THRESHOLD` | `0.20` | Cosine similarity threshold for speaker verification (0.0-1.0) |
 | `LISTEN_URI` | `tcp://0.0.0.0:10350` | URI this service listens on |
 | `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`). Auto-detects: falls back to CPU if CUDA is unavailable |
 | `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |
@@ -240,8 +240,8 @@ INFO [971f8eb8] Speaker verified: jx (similarity=0.3787, threshold=0.20), forwar
 WARNING [3a2c1b9f] Speaker rejected in 5032ms (best=0.1847, threshold=0.20, scores={'jx': '0.1847'})
 ```
 
-- **Your voice** will typically score **0.25–0.75** depending on conditions
-- **TV/other speakers** will typically score **0.05–0.20**
+- **Your voice** will typically score **0.25-0.75** depending on conditions
+- **TV/other speakers** will typically score **0.05-0.20**
 - Set the threshold in the gap between these ranges
 - If you're getting rejected when speaking quietly, **lower the threshold** or **re-enroll with more samples** recorded at different volumes and distances
 
@@ -279,7 +279,7 @@ If you're running other Wyoming services, you can add Voice Match to your existi
 ```yaml
 services:
   wyoming-voice-match:
-    image: jxlarrea/wyoming-voice-match:latest
+    image: ghcr.io/jxlarrea/wyoming-voice-match:latest
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:
@@ -298,19 +298,19 @@ services:
               capabilities: [gpu]
 ```
 
-For CPU-only usage, replace the image tag with `jxlarrea/wyoming-voice-match:cpu` and remove the `deploy` section.
+For CPU-only usage, replace the image tag with `ghcr.io/jxlarrea/wyoming-voice-match:cpu` and remove the `deploy` section.
 
 ## Performance
 
-- **Speaker verification latency:** ~5–25ms on GPU, ~200–500ms on CPU
-- **Speaker extraction:** ~15–35ms on GPU for a typical 10–15s buffer
-- **End-to-end pipeline:** Waits for the full audio stream, then verifies and extracts your voice. Total time depends on how long the satellite streams (typically 8–15 seconds with background noise)
+- **Speaker verification latency:** ~5-25ms on GPU, ~200-500ms on CPU
+- **Speaker extraction:** ~15-35ms on GPU for a typical 10-15s buffer
+- **End-to-end pipeline:** Waits for the full audio stream, then verifies and extracts your voice. Total time depends on how long the satellite streams (typically 8-15 seconds with background noise)
 - **Memory usage:** ~500MB (model + PyTorch runtime)
 - **Accuracy:** ECAPA-TDNN achieves 0.69% Equal Error Rate on VoxCeleb1, state of the art for open-source speaker verification
 
 ## Limitations
 
-- **Short commands** (under 1–2 seconds) produce less audio for verification, reducing accuracy
+- **Short commands** (under 1-2 seconds) produce less audio for verification, reducing accuracy
 - **Voice changes** from illness, whispering, or shouting may lower similarity scores - enroll with varied samples to improve robustness
 - **Satellite listening animation** may continue after the command has been processed, since the satellite's VAD doesn't know the proxy already responded
 - **Multiple users** are supported - enroll each person separately and the service accepts audio from any enrolled speaker

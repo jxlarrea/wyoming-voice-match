@@ -1,6 +1,6 @@
 # Design & Architecture
 
-Complete technical specification for Wyoming Voice Match.
+Complete technical specification for Wyoming Voice Match. This document contains enough detail to rebuild the project from scratch.
 
 ## Project Structure
 
@@ -33,14 +33,14 @@ wyoming-voice-match/
 Wyoming Voice Match is a Wyoming protocol ASR proxy that sits between Home Assistant and an ASR (speech-to-text) service. It solves the "TV problem": when a satellite microphone picks up both the user's voice and TV/radio audio, the ASR gets garbage transcripts mixing voice commands with TV dialogue.
 
 The solution has two parts:
-1. **Speaker verification** — confirm the audio contains an enrolled speaker's voice (rejects TV-only triggers)
-2. **Speaker extraction** — isolate only the enrolled speaker's voice segments from the full audio buffer, discarding TV/radio/other people before sending to ASR
+1. **Speaker verification** - confirm the audio contains an enrolled speaker's voice (rejects TV-only triggers)
+2. **Speaker extraction** - isolate only the enrolled speaker's voice segments from the full audio buffer, discarding TV/radio/other people before sending to ASR
 
 ## Dependencies
 
 ### Python Packages
 
-**requirements.txt** (GPU — torch/torchaudio installed separately from `https://download.pytorch.org/whl/cu121`):
+**requirements.txt** (GPU - torch/torchaudio installed separately from `https://download.pytorch.org/whl/cu121`):
 ```
 wyoming==1.8.0
 speechbrain>=1.0.0
@@ -50,7 +50,7 @@ requests>=2.28.0
 huggingface_hub<0.27.0
 ```
 
-**requirements.cpu.txt** (CPU — torch NOT included here, installed separately in Dockerfile.cpu with pinned versions):
+**requirements.cpu.txt** (CPU - torch NOT included here, installed separately in Dockerfile.cpu with pinned versions):
 ```
 wyoming==1.8.0
 speechbrain>=1.0.0
@@ -61,18 +61,18 @@ huggingface_hub<0.27.0
 ```
 
 Key dependency notes:
-- `huggingface_hub<0.27.0` — pinned to avoid a breaking change in 0.27+ that affects SpeechBrain's model loading
-- `wyoming==1.8.0` — the Wyoming protocol library (AsyncServer, AsyncEventHandler, AsyncClient, event types)
-- `speechbrain` — provides `EncoderClassifier` for ECAPA-TDNN inference
-- `scipy` — only used for `scipy.spatial.distance.cosine`
-- `torchaudio` — only used in enrollment/test scripts for loading WAV files (the main service receives raw PCM bytes)
+- `huggingface_hub<0.27.0` - pinned to avoid a breaking change in 0.27+ that affects SpeechBrain's model loading
+- `wyoming==1.8.0` - the Wyoming protocol library (AsyncServer, AsyncEventHandler, AsyncClient, event types)
+- `speechbrain` - provides `EncoderClassifier` for ECAPA-TDNN inference
+- `scipy` - only used for `scipy.spatial.distance.cosine`
+- `torchaudio` - only used in enrollment/test scripts for loading WAV files (the main service receives raw PCM bytes)
 
 ### System Packages (in Docker)
 
-- `libsndfile1` — required by SpeechBrain/torchaudio for audio I/O
-- `ffmpeg` — used by enrollment script for format conversion
-- `libgomp1` — OpenMP runtime (GPU image only, required by torch)
-- `soundfile` — Python package, CPU image only, provides audio backend for torchaudio
+- `libsndfile1` - required by SpeechBrain/torchaudio for audio I/O
+- `ffmpeg` - used by enrollment script for format conversion
+- `libgomp1` - OpenMP runtime (GPU image only, required by torch)
+- `soundfile` - Python package, CPU image only, provides audio backend for torchaudio
 
 ## Pipeline Architecture
 
@@ -80,28 +80,28 @@ Key dependency notes:
 
 The handler has two execution paths depending on audio length:
 
-**Early Pipeline** (`_run_early_pipeline`) — triggered when buffer reaches `MAX_VERIFY_SECONDS` (default 5.0s):
+**Early Pipeline** (`_run_early_pipeline`) - triggered when buffer reaches `MAX_VERIFY_SECONDS` (default 5.0s):
 1. Verify speaker identity using first 5s snapshot
 2. If verified, set `_responded = True` and wait for AudioStop
 3. When AudioStop arrives, run speaker extraction on full buffer
 4. Forward extracted audio to ASR
 5. Return transcript to Home Assistant
 
-**Sync Pipeline** (`_process_audio_sync`) — triggered at AudioStop if early pipeline hasn't responded:
+**Sync Pipeline** (`_process_audio_sync`) - triggered at AudioStop if early pipeline hasn't responded:
 1. Used for short audio (< 5s, quiet room where AudioStop arrives quickly)
 2. Verify speaker on full buffer
-3. If verified, forward full buffer to ASR (no extraction needed — quiet room)
+3. If verified, forward full buffer to ASR (no extraction needed - quiet room)
 4. Return transcript or empty string
 
 ### Speaker Verification (Three-Pass Strategy)
 
 The `verify()` method uses multiple passes to handle noisy environments:
 
-**Pass 1 — Speech segment:** Energy analysis finds the loudest 1s+ segment in the audio (likely the user's voice near the mic). Extract ECAPA-TDNN embedding from just that segment. If it matches a voiceprint above threshold → accept.
+**Pass 1 - Speech segment:** Energy analysis finds the loudest 1s+ segment in the audio (likely the user's voice near the mic). Extract ECAPA-TDNN embedding from just that segment. If it matches a voiceprint above threshold → accept.
 
-**Pass 2 — First-N seconds:** If pass 1 fails, verify the first `MAX_VERIFY_SECONDS` of audio as a single chunk. This works when the voice is distributed across the audio rather than concentrated. If it matches → accept.
+**Pass 2 - First-N seconds:** If pass 1 fails, verify the first `MAX_VERIFY_SECONDS` of audio as a single chunk. This works when the voice is distributed across the audio rather than concentrated. If it matches → accept.
 
-**Pass 3 — Sliding window:** If passes 1 and 2 fail, scan the full audio with overlapping windows (default 3.0s window, 1.5s step). This catches speech that may be at an arbitrary position. Best score wins.
+**Pass 3 - Sliding window:** If passes 1 and 2 fail, scan the full audio with overlapping windows (default 3.0s window, 1.5s step). This catches speech that may be at an arbitrary position. Best score wins.
 
 The speech segment from pass 1 is preserved in the `VerificationResult` for use by the extraction stage.
 
@@ -109,13 +109,13 @@ The speech segment from pass 1 is preserved in the `VerificationResult` for use 
 
 After verification passes and AudioStop arrives, `extract_speaker_audio()` isolates the enrolled speaker's voice:
 
-**Stage 1 — Energy-based speech detection:**
+**Stage 1 - Energy-based speech detection:**
 - Split buffer into 50ms frames, compute RMS energy per frame
 - Determine noise floor using 10th percentile of frame energies × 5 (minimum 500)
 - Find contiguous regions of high-energy frames (with 300ms gap bridging)
 - Output: list of (start_frame, end_frame) speech regions
 
-**Stage 2 — Voiceprint verification per region:**
+**Stage 2 - Voiceprint verification per region:**
 - For each speech region, ensure minimum 1s length (expand symmetrically if shorter)
 - Extract ECAPA-TDNN embedding from the region
 - Compare against enrolled speaker's voiceprint via cosine similarity
@@ -135,7 +135,7 @@ After verification passes and AudioStop arrives, `extract_speaker_audio()` isola
 
 Critical implementation detail: the early pipeline must wait for the full audio stream before running extraction. This is achieved with `asyncio.Event`:
 
-- `_audio_stopped = asyncio.Event()` — created fresh per session in AudioStart handler
+- `_audio_stopped = asyncio.Event()` - created fresh per session in AudioStart handler
 - Set by the AudioStop handler (always, regardless of `_responded` state)
 - Awaited by `_run_early_pipeline` with 30s timeout
 - Audio chunks continue buffering after `_responded = True` (important: the AudioChunk handler must NOT skip buffering when responded)
@@ -164,7 +164,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 1. Parse args
 2. Configure logging (DEBUG or INFO)
 3. Validate voiceprints directory exists (exit 1 if not)
-4. Create `SpeakerVerifier` — loads ECAPA-TDNN model and all .npy voiceprints
+4. Create `SpeakerVerifier` - loads ECAPA-TDNN model and all .npy voiceprints
 5. Validate at least one voiceprint loaded (exit 1 if not)
 6. Build `wyoming.info.Info` with ASR program/model metadata
 7. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
@@ -182,23 +182,23 @@ The service registers as an ASR program named `"voice-match"` with model `"voice
 Extends `wyoming.server.AsyncEventHandler`. One instance per TCP connection.
 
 **Module-level state:**
-- `_MODEL_LOCK: asyncio.Lock` — prevents concurrent ECAPA-TDNN inference across all handlers
+- `_MODEL_LOCK: asyncio.Lock` - prevents concurrent ECAPA-TDNN inference across all handlers
 
 **Instance state:**
-- `wyoming_info: Info` — service metadata for Describe responses
-- `verifier: SpeakerVerifier` — shared verifier instance
-- `upstream_uri: str` — ASR service URI
-- `_audio_buffer: bytes` — accumulated PCM audio (keeps growing even after verification)
-- `_audio_rate: int` — sample rate (default 16000)
-- `_audio_width: int` — bytes per sample (default 2 = 16-bit)
-- `_audio_channels: int` — channel count (default 1 = mono)
-- `_language: Optional[str]` — language from Transcribe event
-- `_verify_task: Optional[asyncio.Task]` — background verification task
-- `_verify_started: bool` — whether early verification was triggered
-- `_responded: bool` — whether transcript was already sent
-- `_stream_start_time: Optional[float]` — monotonic timestamp for latency tracking
-- `_session_id: str` — 8-char hex UUID for log correlation
-- `_audio_stopped: asyncio.Event` — signals that AudioStop was received
+- `wyoming_info: Info` - service metadata for Describe responses
+- `verifier: SpeakerVerifier` - shared verifier instance
+- `upstream_uri: str` - ASR service URI
+- `_audio_buffer: bytes` - accumulated PCM audio (keeps growing even after verification)
+- `_audio_rate: int` - sample rate (default 16000)
+- `_audio_width: int` - bytes per sample (default 2 = 16-bit)
+- `_audio_channels: int` - channel count (default 1 = mono)
+- `_language: Optional[str]` - language from Transcribe event
+- `_verify_task: Optional[asyncio.Task]` - background verification task
+- `_verify_started: bool` - whether early verification was triggered
+- `_responded: bool` - whether transcript was already sent
+- `_stream_start_time: Optional[float]` - monotonic timestamp for latency tracking
+- `_session_id: str` - 8-char hex UUID for log correlation
+- `_audio_stopped: asyncio.Event` - signals that AudioStop was received
 
 ### Event Handling Flow
 
@@ -251,7 +251,7 @@ Fallback path for short audio (AudioStop arrives before early verification trigg
 1. If empty buffer → return empty transcript
 2. Check `_verify_result_cache` (early verify rejected, re-try with full audio)
 3. If no cache → first-time verification on full buffer
-4. If matched → forward full buffer to ASR (no extraction needed — quiet room path)
+4. If matched → forward full buffer to ASR (no extraction needed - quiet room path)
 5. If rejected → return empty transcript
 
 ### _forward_to_upstream(audio_bytes: bytes) → str
@@ -271,13 +271,13 @@ Sends audio to the upstream Wyoming ASR service:
 ### Class: SpeakerVerifier
 
 **Constructor parameters:**
-- `voiceprints_dir: str` — path to directory of .npy files
-- `model_dir: str` — HuggingFace model cache
-- `device: str` — "cuda" or "cpu" (auto-falls-back to cpu if CUDA unavailable)
-- `threshold: float` — cosine similarity threshold (default 0.20)
-- `max_verify_seconds: float` — controls early verification trigger and first-N pass length
-- `window_seconds: float` — sliding window size for pass 3
-- `step_seconds: float` — sliding window step for pass 3
+- `voiceprints_dir: str` - path to directory of .npy files
+- `model_dir: str` - HuggingFace model cache
+- `device: str` - "cuda" or "cpu" (auto-falls-back to cpu if CUDA unavailable)
+- `threshold: float` - cosine similarity threshold (default 0.20)
+- `max_verify_seconds: float` - controls early verification trigger and first-N pass length
+- `window_seconds: float` - sliding window size for pass 3
+- `step_seconds: float` - sliding window step for pass 3
 
 **On construction:**
 1. Auto-detect CUDA: if device="cuda" but `torch.cuda.is_available()` is False → fall back to "cpu" with warning
@@ -396,10 +396,10 @@ Single-stage: `python:3.11-slim`
 ### Data Volume
 
 The `/data` directory is mounted as a Docker volume and contains:
-- `/data/enrollment/<speaker>/` — WAV files for each enrolled speaker
-- `/data/voiceprints/<speaker>.npy` — generated voiceprint embeddings (192-dim numpy arrays)
-- `/data/models/spkrec-ecapa-voxceleb/` — cached ECAPA-TDNN model from HuggingFace
-- `/data/hf_cache/` — HuggingFace Hub cache (set via `HF_HOME` env var)
+- `/data/enrollment/<speaker>/` - WAV files for each enrolled speaker
+- `/data/voiceprints/<speaker>.npy` - generated voiceprint embeddings (192-dim numpy arrays)
+- `/data/models/spkrec-ecapa-voxceleb/` - cached ECAPA-TDNN model from HuggingFace
+- `/data/hf_cache/` - HuggingFace Hub cache (set via `HF_HOME` env var)
 
 ## Concurrency Model
 
@@ -456,7 +456,7 @@ All source files are included below so this document is fully self-contained.
 ### wyoming_voice_match/__init__.py
 
 ```python
-"""Wyoming Voice Match — ASR proxy with speaker verification."""
+"""Wyoming Voice Match - ASR proxy with speaker verification."""
 
 __version__ = "1.0.0"
 ```
@@ -592,7 +592,7 @@ async def main() -> None:
         sys.exit(1)
 
     _LOGGER.info(
-        "Speaker verifier ready — %d speaker(s) enrolled "
+        "Speaker verifier ready - %d speaker(s) enrolled "
         "(threshold=%.2f, device=%s, verify_window=%.1fs, "
         "sliding_window=%.1fs/%.1fs)",
         len(verifier.voiceprints),
@@ -782,7 +782,7 @@ ENTRYPOINT ["python", "-m", "wyoming_voice_match"]
 ```yaml
 services:
   wyoming-voice-match:
-    image: jxlarrea/wyoming-voice-match:latest
+    image: ghcr.io/jxlarrea/wyoming-voice-match:latest
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:
@@ -809,7 +809,7 @@ services:
 ```yaml
 services:
   wyoming-voice-match:
-    image: jxlarrea/wyoming-voice-match:cpu
+    image: ghcr.io/jxlarrea/wyoming-voice-match:cpu
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:

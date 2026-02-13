@@ -1,6 +1,6 @@
 services:
   wyoming-voice-match:
-    image: jxlarrea/wyoming-voice-match:latest
+    image: ghcr.io/jxlarrea/wyoming-voice-match:latest
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:
