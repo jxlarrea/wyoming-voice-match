@@ -190,23 +190,22 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 for name, score in result.all_scores.items():
                     _LOGGER.debug("[%s]   %s: %.4f", sid, name, score)
 
-            # Trim audio for ASR. This captures the full voice command
-            # (which lives at the start of the buffer) while cutting off
-            # trailing background noise (e.g., TV audio that keeps the
-            # VAD stream open).
-            max_asr_bytes = int(self.asr_max_seconds * bytes_per_second)
-            if len(audio_bytes) > max_asr_bytes:
-                asr_audio = audio_bytes[:max_asr_bytes]
-                _LOGGER.debug(
-                    "[%s] Forwarding first %.1fs of %.1fs audio to ASR",
-                    sid, len(asr_audio) / bytes_per_second, audio_duration,
-                )
+            # Trim audio for ASR. Start from where speech was detected
+            # (skipping leading silence) and take up to asr_max_seconds.
+            # This captures the full voice command while cutting off
+            # trailing background noise (e.g., TV audio).
+            if result.speech_start_sec is not None:
+                start_byte = int(result.speech_start_sec * bytes_per_second)
             else:
-                asr_audio = audio_bytes
-                _LOGGER.debug(
-                    "[%s] Forwarding %.1fs of audio to ASR",
-                    sid, audio_duration,
-                )
+                start_byte = 0
+            end_byte = start_byte + int(self.asr_max_seconds * bytes_per_second)
+            asr_audio = audio_bytes[start_byte:end_byte]
+            asr_start = start_byte / bytes_per_second
+            asr_end = min(end_byte, len(audio_bytes)) / bytes_per_second
+            _LOGGER.debug(
+                "[%s] Forwarding %.1f-%.1fs (%.1fs) of %.1fs audio to ASR",
+                sid, asr_start, asr_end, asr_end - asr_start, audio_duration,
+            )
 
             transcript = await self._forward_to_upstream(asr_audio)
             await self.write_event(Transcript(text=transcript).event())
