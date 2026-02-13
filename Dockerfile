@@ -23,7 +23,6 @@ RUN pip install --no-cache-dir \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cufft && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/curand && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusolver && \
-    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusparse && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nccl && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nvjitlink && \
     # Strip PyTorch
