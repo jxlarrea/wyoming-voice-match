@@ -15,9 +15,14 @@ RUN pip install --no-cache-dir \
     pip install --no-cache-dir -r requirements.txt && \
     # Uninstall triton (~600MB, not needed for inference)
     pip uninstall -y triton 2>/dev/null; \
-    # Remove nvidia CUDA pip packages (~2.7GB) - keep cudnn which PyTorch needs
-    find /usr/local/lib/python3.10/dist-packages/nvidia -mindepth 1 -maxdepth 1 -type d ! -name "cudnn*" -exec rm -rf {} + && \
-    find /usr/local/lib/python3.10/dist-packages -maxdepth 1 -name "nvidia_*.dist-info" ! -name "nvidia_cudnn*" -exec rm -rf {} + && \
+    # Remove large unused nvidia CUDA pip packages (keep cudnn, cupti, cuda_runtime, cuda_nvrtc)
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cublas && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cufft && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/curand && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusolver && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusparse && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nccl && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nvjitlink && \
     # Strip PyTorch
     find /usr/local/lib/python3.10/dist-packages/torch -name "*.a" -delete && \
     find /usr/local/lib/python3.10/dist-packages/torch -name "test" -type d -exec rm -rf {} + 2>/dev/null; \
