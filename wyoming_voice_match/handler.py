@@ -124,6 +124,22 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             if _LOGGER.isEnabledFor(logging.DEBUG):
                 for name, score in result.all_scores.items():
                     _LOGGER.debug("  %s: %.4f", name, score)
+
+            # Trim audio to max_verify_seconds to avoid sending trailing
+            # background noise (e.g., TV) to the upstream ASR
+            bytes_per_second = (
+                self._audio_rate * self._audio_width * self._audio_channels
+            )
+            max_asr_bytes = int(self.verifier.max_verify_seconds * bytes_per_second)
+            if len(audio_bytes) > max_asr_bytes:
+                trimmed = audio_bytes[:max_asr_bytes]
+                _LOGGER.debug(
+                    "Trimmed audio from %.1fs to %.1fs for ASR",
+                    len(audio_bytes) / bytes_per_second,
+                    len(trimmed) / bytes_per_second,
+                )
+                audio_bytes = trimmed
+
             transcript = await self._forward_to_upstream(audio_bytes)
             await self.write_event(Transcript(text=transcript).event())
         else:
