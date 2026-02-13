@@ -484,11 +484,15 @@ class SpeakerVerifier:
             if similarity >= similarity_threshold:
                 region_duration = (end_frame - start_frame) * frame_ms / 1000
                 if region_duration >= sub_scan_min_seconds:
-                    # Stage 3: Sub-region scan to trim non-speaker edges
+                    # Stage 3: Sub-region scan to trim non-speaker edges.
+                    # Use a higher threshold than extraction - the full
+                    # verification threshold - so edges need strong voice
+                    # presence, not just a faint match.
+                    trim_threshold = self.threshold
                     trimmed = self._trim_region(
                         audio_bytes, start_frame, end_frame,
                         frame_size, bytes_per_sample, voiceprint,
-                        sample_rate, similarity_threshold,
+                        sample_rate, trim_threshold,
                         sub_scan_window_seconds, sub_scan_step_seconds,
                         frame_ms,
                     )
