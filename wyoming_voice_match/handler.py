@@ -190,27 +190,14 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 for name, score in result.all_scores.items():
                     _LOGGER.debug("  %s: %.4f", name, score)
 
-            # Use the detected speech segment for ASR to avoid sending
-            # background noise (e.g., TV audio) to the transcription service.
-            # Fall back to trimming to max_verify_seconds if no segment detected.
-            if result.speech_audio is not None:
-                asr_audio = result.speech_audio
-                _LOGGER.debug(
-                    "Forwarding speech segment to ASR (%.1fs of %.1fs)",
-                    len(asr_audio) / bytes_per_second,
-                    audio_duration,
-                )
-            else:
-                max_asr_bytes = int(self.verifier.max_verify_seconds * bytes_per_second)
-                if len(audio_bytes) > max_asr_bytes:
-                    asr_audio = audio_bytes[:max_asr_bytes]
-                    _LOGGER.debug(
-                        "Trimmed audio from %.1fs to %.1fs for ASR",
-                        audio_duration,
-                        len(asr_audio) / bytes_per_second,
-                    )
-                else:
-                    asr_audio = audio_bytes
+            # Forward full audio to ASR. The speech segment is only used
+            # for speaker verification — the full buffer contains the
+            # complete command needed for accurate transcription.
+            asr_audio = audio_bytes
+            _LOGGER.debug(
+                "Forwarding %.1fs of audio to ASR",
+                len(asr_audio) / bytes_per_second,
+            )
 
             transcript = await self._forward_to_upstream(asr_audio)
             await self.write_event(Transcript(text=transcript).event())
