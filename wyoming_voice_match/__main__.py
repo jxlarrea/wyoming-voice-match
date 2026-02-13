@@ -81,6 +81,12 @@ def get_args() -> argparse.Namespace:
         default=float(os.environ.get("VERIFY_STEP_SECONDS", "1.5")),
         help="Sliding window step in seconds (default: 1.5)",
     )
+    parser.add_argument(
+        "--tag-speaker",
+        action="store_true",
+        default=os.environ.get("TAG_SPEAKER", "false").lower() in ("true", "1", "yes"),
+        help="Prepend [speaker_name] to transcripts (default: false)",
+    )
 
     return parser.parse_args()
 
@@ -181,6 +187,7 @@ async def main() -> None:
             wyoming_info,
             verifier,
             args.upstream_uri,
+            args.tag_speaker,
         )
     )
 

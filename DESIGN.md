@@ -173,6 +173,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 | `--max-verify-seconds` | `MAX_VERIFY_SECONDS` | `5.0` | Early verification trigger |
 | `--window-seconds` | `VERIFY_WINDOW_SECONDS` | `3.0` | Sliding window size |
 | `--step-seconds` | `VERIFY_STEP_SECONDS` | `1.5` | Sliding window step |
+| `--tag-speaker` | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts |
 
 ### Startup Sequence
 
@@ -184,7 +185,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 6. Build `wyoming.info.Info` with ASR program/model metadata
 7. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
 
-The handler factory uses `functools.partial` to pass `wyoming_info`, `verifier`, and `upstream_uri` to each new handler instance.
+The handler factory uses `functools.partial` to pass `wyoming_info`, `verifier`, `upstream_uri`, and `tag_speaker` to each new handler instance.
 
 ### Wyoming Service Info
 
@@ -203,6 +204,7 @@ Extends `wyoming.server.AsyncEventHandler`. One instance per TCP connection.
 - `wyoming_info: Info` - service metadata for Describe responses
 - `verifier: SpeakerVerifier` - shared verifier instance
 - `upstream_uri: str` - ASR service URI
+- `tag_speaker: bool` - whether to prepend `[speaker_name]` to transcripts
 - `_audio_buffer: bytes` - accumulated PCM audio (keeps growing even after verification)
 - `_audio_rate: int` - sample rate (default 16000)
 - `_audio_width: int` - bytes per sample (default 2 = 16-bit)
@@ -256,8 +258,9 @@ Called as a background task when 5s of audio is buffered.
    - Run `verifier.extract_speaker_audio(full_buffer, speaker_name, sample_rate)` in `run_in_executor`
    - Release lock
    - Forward extracted audio to upstream ASR with `_forward_to_upstream()`
+   - Apply speaker tagging if enabled: `_tag_transcript(transcript, speaker_name)` prepends `[speaker_name]`
    - Write `Transcript` event back to HA
-   - Log total pipeline time
+   - Log total pipeline time with breakdown (verify, extract, asr, processing)
 
 ### _process_audio_sync()
 
@@ -266,7 +269,7 @@ Fallback path for short audio (AudioStop arrives before early verification trigg
 1. If empty buffer → return empty transcript
 2. Check `_verify_result_cache` (early verify rejected, re-try with full audio)
 3. If no cache → first-time verification on full buffer
-4. If matched → forward full buffer to ASR (no extraction needed - quiet room path)
+4. If matched → forward full buffer to ASR (no extraction needed - quiet room path), apply speaker tagging if enabled
 5. If rejected → return empty transcript
 
 ### _forward_to_upstream(audio_bytes: bytes) → str
@@ -280,6 +283,10 @@ Sends audio to the upstream Wyoming ASR service:
 5. Send `AudioStop`
 6. Read events until `Transcript` received
 7. Return transcript text (or empty string on error)
+
+### _tag_transcript(transcript: str, speaker_name: Optional[str]) → str
+
+Prepends `[speaker_name]` to the transcript when `tag_speaker` is enabled. Returns the transcript unchanged if tagging is disabled, speaker name is None, or transcript is empty. Useful for LLM-based conversation agents that can use the speaker identity for personalization.
 
 ## Verifier (verify.py)
 
@@ -581,6 +588,12 @@ def get_args() -> argparse.Namespace:
         default=float(os.environ.get("VERIFY_STEP_SECONDS", "1.5")),
         help="Sliding window step in seconds (default: 1.5)",
     )
+    parser.add_argument(
+        "--tag-speaker",
+        action="store_true",
+        default=os.environ.get("TAG_SPEAKER", "false").lower() in ("true", "1", "yes"),
+        help="Prepend [speaker_name] to transcripts (default: false)",
+    )
 
     return parser.parse_args()
 
@@ -678,6 +691,7 @@ async def main() -> None:
             wyoming_info,
             verifier,
             args.upstream_uri,
+            args.tag_speaker,
         )
     )
 
@@ -833,6 +847,7 @@ services:
       - LISTEN_URI=tcp://0.0.0.0:10350
       - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
+      # - TAG_SPEAKER=true                # Prepend [speaker_name] to transcripts
     deploy:
       resources:
         reservations:
@@ -860,6 +875,7 @@ services:
       - LISTEN_URI=tcp://0.0.0.0:10350
       - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
+      # - TAG_SPEAKER=true                # Prepend [speaker_name] to transcripts
 ```
 
 ### requirements.txt

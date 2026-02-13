@@ -213,6 +213,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `MAX_VERIFY_SECONDS` | `5.0` | Seconds of audio to buffer before starting speaker verification |
 | `VERIFY_WINDOW_SECONDS` | `3.0` | Sliding window size (in seconds) for the fallback verification pass |
 | `VERIFY_STEP_SECONDS` | `1.5` | Step size (in seconds) between sliding windows |
+| `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts (useful for LLM-based conversation agents) |
 
 ### Tuning the Threshold
 
@@ -237,7 +238,8 @@ You'll see output like:
 
 ```
 INFO [971f8eb8] Speaker verified: jx (similarity=0.3787, threshold=0.20), forwarding to ASR immediately
-WARNING [3a2c1b9f] Speaker rejected in 5032ms (best=0.1847, threshold=0.20, scores={'jx': '0.1847'})
+INFO [971f8eb8] Pipeline complete in 10649ms: "Tell me the weather" (verify=5ms, extract=39ms, asr=2100ms, processing=44ms)
+WARNING [3a2c1b9f] Speaker rejected in 5032ms (verify=252ms, best=0.1847, threshold=0.20, scores={'jx': '0.1847'})
 ```
 
 - **Your voice** will typically score **0.25-0.75** depending on conditions
@@ -261,6 +263,18 @@ If you need to adjust further:
 
 > **Note:** The satellite may continue showing a "listening" animation after the command has been processed. This is cosmetic - the proxy waits for the full stream to capture your complete command, but Home Assistant will have the transcript as soon as extraction and ASR finish.
 
+### Speaker Tagging
+
+When `TAG_SPEAKER=true` is set, the verified speaker's name is prepended to the transcript:
+
+```
+[jx] Tell me the weather and the current price of Bitcoin
+```
+
+This is useful when using an LLM-based conversation agent (e.g., OpenAI, Claude, or a custom integration) - the LLM can use the speaker's identity to personalize responses or trigger per-user automations. This setting has no effect on rejected speakers (empty transcripts).
+
+> **Note:** If you're using Home Assistant's built-in intent-based assistant, leave this disabled. The `[speaker_name]` prefix will interfere with intent matching. This feature is designed for LLM-based conversation agents that can parse the tag naturally.
+
 ### Re-enrollment
 
 To update a speaker's voiceprint, add more WAV files to `data/enrollment/<speaker>/` and re-run enrollment. The script processes all WAV files in the folder to generate an updated voiceprint.
@@ -282,6 +296,7 @@ Place a WAV file in your `data/` folder (any sample rate or channel count - it w
 docker compose run --rm --entrypoint python wyoming-voice-match \
   -m scripts.demo \
   --speaker john \
+  --threshold 0.20 \
   --input /data/test_audio.wav \
   --output /data/cleaned.wav
 ```

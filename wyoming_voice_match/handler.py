@@ -35,6 +35,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         wyoming_info: Info,
         verifier: SpeakerVerifier,
         upstream_uri: str,
+        tag_speaker: bool = False,
         *args,
         **kwargs,
     ) -> None:
@@ -43,6 +44,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self.wyoming_info = wyoming_info
         self.verifier = verifier
         self.upstream_uri = upstream_uri
+        self.tag_speaker = tag_speaker
 
         # Per-connection state
         self._audio_buffer = bytes()
@@ -137,12 +139,14 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         # Run speaker verification
         async with _MODEL_LOCK:
             loop = asyncio.get_running_loop()
+            verify_start = time.monotonic()
             result = await loop.run_in_executor(
                 None,
                 self.verifier.verify,
                 verify_audio,
                 self._audio_rate,
             )
+            verify_ms = (time.monotonic() - verify_start) * 1000
 
         if not result.is_match:
             # Don't respond yet — wait for AudioStop in case more audio
@@ -189,6 +193,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         full_buffer = bytes(self._audio_buffer)
 
         speaker_name = result.matched_speaker
+        extract_ms = 0.0
         if speaker_name:
             _LOGGER.debug(
                 "[%s] Extracting speaker '%s' audio from %.1fs buffer",
@@ -196,6 +201,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             )
             async with _MODEL_LOCK:
                 loop = asyncio.get_running_loop()
+                extract_start = time.monotonic()
                 forward_audio = await loop.run_in_executor(
                     None,
                     self.verifier.extract_speaker_audio,
@@ -203,6 +209,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                     speaker_name,
                     self._audio_rate,
                 )
+                extract_ms = (time.monotonic() - extract_start) * 1000
         else:
             forward_audio = full_buffer
 
@@ -210,14 +217,20 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         _LOGGER.debug("[%s] Forwarding %.1fs to ASR", sid, asr_duration)
 
         # Forward to ASR and respond immediately
+        asr_start = time.monotonic()
         transcript = await self._forward_to_upstream(forward_audio)
-        await self.write_event(Transcript(text=transcript).event())
+        asr_ms = (time.monotonic() - asr_start) * 1000
+        tagged = self._tag_transcript(transcript, speaker_name)
+        await self.write_event(Transcript(text=tagged).event())
         self._responded = True
 
         total_elapsed = self._elapsed_ms()
+        processing_ms = verify_ms + extract_ms
         _LOGGER.info(
-            "[%s] Pipeline complete in %.0fms: \"%s\"",
-            sid, total_elapsed, transcript,
+            "[%s] Pipeline complete in %.0fms: \"%s\" "
+            "(verify=%.0fms, extract=%.0fms, asr=%.0fms, processing=%.0fms)",
+            sid, total_elapsed, tagged,
+            verify_ms, extract_ms, asr_ms, processing_ms,
         )
 
     async def _process_audio_sync(self) -> None:
@@ -251,12 +264,14 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             )
             async with _MODEL_LOCK:
                 loop = asyncio.get_running_loop()
+                verify_start = time.monotonic()
                 result = await loop.run_in_executor(
                     None,
                     self.verifier.verify,
                     audio_bytes,
                     self._audio_rate,
                 )
+                verify_ms = (time.monotonic() - verify_start) * 1000
             # Use best of early and full
             if cached.similarity > result.similarity:
                 result = cached
@@ -268,12 +283,14 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             )
             async with _MODEL_LOCK:
                 loop = asyncio.get_running_loop()
+                verify_start = time.monotonic()
                 result = await loop.run_in_executor(
                     None,
                     self.verifier.verify,
                     audio_bytes,
                     self._audio_rate,
                 )
+                verify_ms = (time.monotonic() - verify_start) * 1000
 
         if result.is_match:
             _LOGGER.info(
@@ -291,23 +308,34 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 sid, audio_duration,
             )
 
+            asr_start = time.monotonic()
             transcript = await self._forward_to_upstream(audio_bytes)
-            await self.write_event(Transcript(text=transcript).event())
+            asr_ms = (time.monotonic() - asr_start) * 1000
+            tagged = self._tag_transcript(transcript, result.matched_speaker)
+            await self.write_event(Transcript(text=tagged).event())
             self._responded = True
             total_elapsed = self._elapsed_ms()
             _LOGGER.info(
-                "[%s] Pipeline complete in %.0fms: \"%s\"",
-                sid, total_elapsed, transcript,
+                "[%s] Pipeline complete in %.0fms: \"%s\" "
+                "(verify=%.0fms, asr=%.0fms, processing=%.0fms)",
+                sid, total_elapsed, tagged,
+                verify_ms, asr_ms, verify_ms,
             )
         else:
             total_elapsed = self._elapsed_ms()
             _LOGGER.warning(
-                "[%s] Speaker rejected in %.0fms (best=%.4f, threshold=%.2f, scores=%s)",
-                sid, total_elapsed, result.similarity, result.threshold,
+                "[%s] Speaker rejected in %.0fms (verify=%.0fms, best=%.4f, threshold=%.2f, scores=%s)",
+                sid, total_elapsed, verify_ms, result.similarity, result.threshold,
                 {n: f"{s:.4f}" for n, s in result.all_scores.items()},
             )
             await self.write_event(Transcript(text="").event())
             self._responded = True
+
+    def _tag_transcript(self, transcript: str, speaker_name: Optional[str]) -> str:
+        """Prepend [speaker_name] to transcript if tagging is enabled."""
+        if self.tag_speaker and speaker_name and transcript:
+            return f"[{speaker_name}] {transcript}"
+        return transcript
 
     def _elapsed_ms(self) -> float:
         """Milliseconds since stream start."""
