@@ -25,6 +25,7 @@ class VerificationResult:
     all_scores: Dict[str, float] = field(default_factory=dict)
     speech_audio: Optional[bytes] = field(default=None, repr=False)
     speech_start_sec: Optional[float] = None
+    speech_end_sec: Optional[float] = None
 
 
 class SpeakerVerifier:
@@ -127,12 +128,13 @@ class SpeakerVerifier:
         best_result: Optional[VerificationResult] = None
         speech_chunk: Optional[bytes] = None
         speech_start_sec: Optional[float] = None
+        speech_end_sec: Optional[float] = None
 
         # --- Pass 1: energy-based speech segment ---
         pass1_start = time.monotonic()
         speech_result = self._extract_speech_segment(audio_bytes, sample_rate)
         if speech_result is not None:
-            speech_chunk, speech_start_sec = speech_result
+            speech_chunk, speech_start_sec, speech_end_sec = speech_result
             speech_duration = len(speech_chunk) / bytes_per_second
             _LOGGER.debug(
                 "Pass 1 (speech): verifying %.1fs speech segment from %.1fs audio",
@@ -151,6 +153,7 @@ class SpeakerVerifier:
                 _LOGGER.debug("Total verification time: %.0fms", pass1_elapsed)
                 result.speech_audio = speech_chunk
                 result.speech_start_sec = speech_start_sec
+                result.speech_end_sec = speech_end_sec
                 return result
 
             _LOGGER.debug(
@@ -188,6 +191,7 @@ class SpeakerVerifier:
             _LOGGER.debug("Total verification time: %.0fms", total)
             result.speech_audio = speech_chunk
             result.speech_start_sec = speech_start_sec
+            result.speech_end_sec = speech_end_sec
             return result
 
         _LOGGER.debug(
@@ -238,6 +242,7 @@ class SpeakerVerifier:
                     _LOGGER.debug("Total verification time: %.0fms", total)
                     window_result.speech_audio = speech_chunk
                     window_result.speech_start_sec = speech_start_sec
+                    window_result.speech_end_sec = speech_end_sec
                     return window_result
 
                 offset += step_bytes
@@ -325,7 +330,7 @@ class SpeakerVerifier:
             peak_energy,
         )
 
-        return segment, offset_seconds
+        return segment, offset_seconds, offset_seconds + segment_duration
 
     def _verify_chunk(self, audio_bytes: bytes, sample_rate: int) -> VerificationResult:
         """Verify a single chunk of audio against all enrolled voiceprints."""

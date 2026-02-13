@@ -169,24 +169,18 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             for name, score in result.all_scores.items():
                 _LOGGER.debug("[%s]   %s: %.4f", sid, name, score)
 
-        # Trim audio for ASR
+        # Trim audio for ASR: from speech_start (with padding) to
+        # speech_end + asr_max_seconds (to allow for longer commands
+        # that extend beyond the detected energy peak)
         bytes_per_second = (
             self._audio_rate * self._audio_width * self._audio_channels
         )
+        asr_audio = self._trim_for_asr(verify_audio, result, bytes_per_second)
         audio_duration = len(verify_audio) / bytes_per_second
-
-        if result.speech_start_sec is not None:
-            start_sec = max(0.0, result.speech_start_sec - _ASR_PADDING_SEC)
-            start_byte = int(start_sec * bytes_per_second)
-        else:
-            start_byte = 0
-        end_byte = start_byte + int(self.asr_max_seconds * bytes_per_second)
-        asr_audio = verify_audio[start_byte:end_byte]
-        asr_start = start_byte / bytes_per_second
-        asr_end = min(end_byte, len(verify_audio)) / bytes_per_second
+        asr_duration = len(asr_audio) / bytes_per_second
         _LOGGER.debug(
-            "[%s] Forwarding %.1f-%.1fs (%.1fs) of %.1fs audio to ASR",
-            sid, asr_start, asr_end, asr_end - asr_start, audio_duration,
+            "[%s] Forwarding %.1fs (trimmed from %.1fs) to ASR",
+            sid, asr_duration, audio_duration,
         )
 
         # Forward to ASR and respond immediately
@@ -266,18 +260,11 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                     _LOGGER.debug("[%s]   %s: %.4f", sid, name, score)
 
             # Trim audio for ASR
-            if result.speech_start_sec is not None:
-                start_sec = max(0.0, result.speech_start_sec - _ASR_PADDING_SEC)
-                start_byte = int(start_sec * bytes_per_second)
-            else:
-                start_byte = 0
-            end_byte = start_byte + int(self.asr_max_seconds * bytes_per_second)
-            asr_audio = audio_bytes[start_byte:end_byte]
-            asr_start = start_byte / bytes_per_second
-            asr_end = min(end_byte, len(audio_bytes)) / bytes_per_second
+            asr_audio = self._trim_for_asr(audio_bytes, result, bytes_per_second)
+            asr_duration = len(asr_audio) / bytes_per_second
             _LOGGER.debug(
-                "[%s] Forwarding %.1f-%.1fs (%.1fs) of %.1fs audio to ASR",
-                sid, asr_start, asr_end, asr_end - asr_start, audio_duration,
+                "[%s] Forwarding %.1fs (trimmed from %.1fs) to ASR",
+                sid, asr_duration, audio_duration,
             )
 
             transcript = await self._forward_to_upstream(asr_audio)
@@ -297,6 +284,45 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             )
             await self.write_event(Transcript(text="").event())
             self._responded = True
+
+    def _trim_for_asr(
+        self,
+        audio_bytes: bytes,
+        result: VerificationResult,
+        bytes_per_second: int,
+    ) -> bytes:
+        """Trim audio for ASR using speech detection bounds.
+
+        Uses speech_start (with padding) as the start point and
+        speech_end + asr_max_seconds as the end point. This allows
+        the command to extend beyond the detected energy peak while
+        still cutting off background noise.
+        """
+        # Start: speech_start - padding (or 0)
+        if result.speech_start_sec is not None:
+            start_sec = max(0.0, result.speech_start_sec - _ASR_PADDING_SEC)
+        else:
+            start_sec = 0.0
+
+        # End: speech_end + asr_max_seconds (or start + asr_max_seconds)
+        if result.speech_end_sec is not None:
+            end_sec = result.speech_end_sec + self.asr_max_seconds
+        else:
+            end_sec = start_sec + self.asr_max_seconds
+
+        start_byte = int(start_sec * bytes_per_second)
+        end_byte = int(end_sec * bytes_per_second)
+
+        trimmed = audio_bytes[start_byte:end_byte]
+        _LOGGER.debug(
+            "[%s] ASR trim: %.1f-%.1fs (speech: %.1f-%.1fs)",
+            self._session_id,
+            start_sec,
+            min(end_sec, len(audio_bytes) / bytes_per_second),
+            result.speech_start_sec or 0.0,
+            result.speech_end_sec or 0.0,
+        )
+        return trimmed
 
     def _elapsed_ms(self) -> float:
         """Milliseconds since stream start."""
