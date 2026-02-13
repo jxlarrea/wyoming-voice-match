@@ -517,7 +517,7 @@ class SpeakerVerifier:
                 rescued = self._trim_region(
                     audio_bytes, start_frame, end_frame,
                     frame_size, bytes_per_sample, voiceprint,
-                    sample_rate, similarity_threshold,
+                    sample_rate, self.threshold,
                     sub_scan_window_seconds, sub_scan_step_seconds,
                     frame_ms,
                 )
