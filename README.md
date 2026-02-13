@@ -215,7 +215,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `MAX_VERIFY_SECONDS` | `5.0` | Seconds of audio to buffer before starting speaker verification |
 | `VERIFY_WINDOW_SECONDS` | `3.0` | Sliding window size (in seconds) for the fallback verification pass |
 | `VERIFY_STEP_SECONDS` | `1.5` | Step size (in seconds) between sliding windows |
-| `ASR_MAX_SECONDS` | `3.0` | Max audio duration (in seconds) forwarded to the upstream ASR. Keeps TV noise out of transcripts. Increase to 5–10 if your commands are being truncated |
+| `ASR_MAX_SECONDS` | `8.0` | Max seconds of audio buffered before forwarding to ASR after verification passes. Lower for faster response, raise for longer commands |
 
 ### Tuning the Threshold
 
@@ -257,7 +257,7 @@ The default settings are already tuned for noisy environments (TV, radio, etc.).
 ```yaml
     environment:
       - MAX_VERIFY_SECONDS=5.0   # Start verification after 5s (don't wait for silence)
-      - ASR_MAX_SECONDS=3.0      # Only send first 3s to ASR (cuts off TV tail)
+      - ASR_MAX_SECONDS=8.0      # Wait up to 8s of audio before forwarding to ASR
       - VERIFY_THRESHOLD=0.20           # Low threshold to account for mixed audio
 ```
 
@@ -316,7 +316,7 @@ For CPU-only usage, replace the image tag with `jxlarrea/wyoming-voice-match:cpu
 
 - **Short commands** (under 1–2 seconds) produce less audio for verification, reducing accuracy
 - **Voice changes** from illness, whispering, or shouting may lower similarity scores — enroll with varied samples to improve robustness
-- **TV noise in transcripts** can occur if `ASR_MAX_SECONDS` is set too high — the default of 3 seconds works well for most commands. Increase it if longer commands are being truncated
+- **TV noise in transcripts** can occur if `ASR_MAX_SECONDS` is set too high — the default of 8 seconds works well for most commands. Increase it if longer commands are being truncated
 - **Satellite listening animation** may continue after the command has been processed, since the satellite's VAD doesn't know the proxy already responded
 - **Multiple users** are supported — enroll each person separately and the service accepts audio from any enrolled speaker
 

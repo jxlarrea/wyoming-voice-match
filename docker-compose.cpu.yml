@@ -17,4 +17,4 @@ services:
       # - MAX_VERIFY_SECONDS=5.0   # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0       # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5         # Sliding window step size
-      # - ASR_MAX_SECONDS=3.0     # Max audio duration forwarded to ASR
+      # - ASR_MAX_SECONDS=8.0     # Max audio duration forwarded to ASR

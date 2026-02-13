@@ -40,7 +40,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         wyoming_info: Info,
         verifier: SpeakerVerifier,
         upstream_uri: str,
-        asr_max_seconds: float = 5.0,
+        asr_max_seconds: float = 8.0,
         *args,
         **kwargs,
     ) -> None:
@@ -171,14 +171,34 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             for name, score in result.all_scores.items():
                 _LOGGER.debug("[%s]   %s: %.4f", sid, name, score)
 
-        # Trim audio for ASR: from speech_start (with padding) to
-        # speech_end + asr_max_seconds (to allow for longer commands
-        # that extend beyond the detected energy peak)
+        # Use the live buffer (not the verification snapshot). After
+        # verification passes, wait for the buffer to reach asr_max_seconds
+        # so we capture the full command. The noise-aware trim will then
+        # decide whether to send everything (quiet) or trim (noisy).
         bytes_per_second = (
             self._audio_rate * self._audio_width * self._audio_channels
         )
-        asr_audio = self._trim_for_asr(verify_audio, result, bytes_per_second)
-        audio_duration = len(verify_audio) / bytes_per_second
+        target_bytes = int(self.asr_max_seconds * bytes_per_second)
+
+        if len(self._audio_buffer) < target_bytes:
+            wait_needed = (target_bytes - len(self._audio_buffer)) / bytes_per_second
+            _LOGGER.debug(
+                "[%s] Waiting up to %.1fs for buffer to reach %.1fs",
+                sid, wait_needed, self.asr_max_seconds,
+            )
+            poll_interval = 0.1
+            waited = 0.0
+            while len(self._audio_buffer) < target_bytes and waited < wait_needed:
+                await asyncio.sleep(poll_interval)
+                waited += poll_interval
+            _LOGGER.debug(
+                "[%s] Buffer now %.1fs after waiting %.1fs",
+                sid, len(self._audio_buffer) / bytes_per_second, waited,
+            )
+
+        forward_audio = bytes(self._audio_buffer)
+        asr_audio = self._trim_for_asr(forward_audio, result, bytes_per_second)
+        audio_duration = len(forward_audio) / bytes_per_second
         asr_duration = len(asr_audio) / bytes_per_second
         _LOGGER.debug(
             "[%s] Forwarding %.1fs (trimmed from %.1fs) to ASR",
