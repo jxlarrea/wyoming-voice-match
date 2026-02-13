@@ -312,7 +312,6 @@ This is useful for understanding how the extraction works, tuning your threshold
 
 - **Speaker verification latency:** ~5-25ms on GPU, ~200-500ms on CPU
 - **Speaker extraction:** ~15-35ms on GPU for a typical 10-15s buffer
-- **End-to-end pipeline:** Waits for the full audio stream, then verifies and extracts your voice. Total time depends on how long the satellite streams (typically 8-15 seconds with background noise)
 - **Memory usage:** ~500MB (model + PyTorch runtime)
 - **Accuracy:** ECAPA-TDNN achieves 0.69% Equal Error Rate on VoxCeleb1, state of the art for open-source speaker verification
 
