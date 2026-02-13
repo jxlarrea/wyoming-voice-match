@@ -23,6 +23,7 @@ class VerificationResult:
     threshold: float
     matched_speaker: Optional[str] = None
     all_scores: Dict[str, float] = field(default_factory=dict)
+    speech_audio: Optional[bytes] = field(default=None, repr=False)
 
 
 class SpeakerVerifier:
@@ -123,6 +124,7 @@ class SpeakerVerifier:
         bytes_per_second = sample_rate * 2  # 16-bit = 2 bytes per sample
         audio_duration = len(audio_bytes) / bytes_per_second
         best_result: Optional[VerificationResult] = None
+        speech_chunk: Optional[bytes] = None
 
         # --- Pass 1: energy-based speech segment ---
         pass1_start = time.monotonic()
@@ -144,6 +146,7 @@ class SpeakerVerifier:
                     pass1_elapsed, result.similarity,
                 )
                 _LOGGER.debug("Total verification time: %.0fms", pass1_elapsed)
+                result.speech_audio = speech_chunk
                 return result
 
             _LOGGER.debug(
@@ -179,6 +182,7 @@ class SpeakerVerifier:
                 pass2_elapsed, result.similarity,
             )
             _LOGGER.debug("Total verification time: %.0fms", total)
+            result.speech_audio = speech_chunk
             return result
 
         _LOGGER.debug(
@@ -227,6 +231,7 @@ class SpeakerVerifier:
                         window_count, pass3_elapsed, window_result.similarity,
                     )
                     _LOGGER.debug("Total verification time: %.0fms", total)
+                    window_result.speech_audio = speech_chunk
                     return window_result
 
                 offset += step_bytes

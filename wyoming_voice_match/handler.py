@@ -125,22 +125,32 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 for name, score in result.all_scores.items():
                     _LOGGER.debug("  %s: %.4f", name, score)
 
-            # Trim audio to max_verify_seconds to avoid sending trailing
-            # background noise (e.g., TV) to the upstream ASR
+            # Use the detected speech segment for ASR to avoid sending
+            # background noise (e.g., TV audio) to the transcription service.
+            # Fall back to trimming to max_verify_seconds if no segment detected.
             bytes_per_second = (
                 self._audio_rate * self._audio_width * self._audio_channels
             )
-            max_asr_bytes = int(self.verifier.max_verify_seconds * bytes_per_second)
-            if len(audio_bytes) > max_asr_bytes:
-                trimmed = audio_bytes[:max_asr_bytes]
+            if result.speech_audio is not None:
+                asr_audio = result.speech_audio
                 _LOGGER.debug(
-                    "Trimmed audio from %.1fs to %.1fs for ASR",
+                    "Forwarding speech segment to ASR (%.1fs of %.1fs)",
+                    len(asr_audio) / bytes_per_second,
                     len(audio_bytes) / bytes_per_second,
-                    len(trimmed) / bytes_per_second,
                 )
-                audio_bytes = trimmed
+            else:
+                max_asr_bytes = int(self.verifier.max_verify_seconds * bytes_per_second)
+                if len(audio_bytes) > max_asr_bytes:
+                    asr_audio = audio_bytes[:max_asr_bytes]
+                    _LOGGER.debug(
+                        "Trimmed audio from %.1fs to %.1fs for ASR",
+                        len(audio_bytes) / bytes_per_second,
+                        len(asr_audio) / bytes_per_second,
+                    )
+                else:
+                    asr_audio = audio_bytes
 
-            transcript = await self._forward_to_upstream(audio_bytes)
+            transcript = await self._forward_to_upstream(asr_audio)
             await self.write_event(Transcript(text=transcript).event())
         else:
             _LOGGER.warning(
