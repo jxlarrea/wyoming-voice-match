@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+import uuid
 from typing import Optional
 
 from wyoming.asr import Transcribe, Transcript
@@ -54,6 +55,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self._verify_result: Optional[VerificationResult] = None
         self._verify_started: bool = False
         self._stream_start_time: Optional[float] = None
+        self._session_id: str = uuid.uuid4().hex[:8]
 
     async def handle_event(self, event: Event) -> bool:
         """Process a single Wyoming event.
@@ -78,7 +80,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             self._verify_result = None
             self._verify_started = False
             self._stream_start_time = time.monotonic()
-            _LOGGER.debug("── New audio session started ──")
+            _LOGGER.debug("[%s] ── New audio session started ──", self._session_id)
             return True
 
         # Audio data — accumulate and trigger early verification
@@ -99,8 +101,8 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 if buffered_seconds >= self.verifier.max_verify_seconds:
                     self._verify_started = True
                     _LOGGER.debug(
-                        "Early verify: %.1fs buffered, starting verification",
-                        buffered_seconds,
+                        "[%s] Early verify: %.1fs buffered, starting verification",
+                        self._session_id, buffered_seconds,
                     )
                     # Take a snapshot of the buffer for verification
                     verify_audio = bytes(self._audio_buffer)
@@ -132,6 +134,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
 
     async def _process_audio(self) -> None:
         """Verify the speaker and forward audio or reject."""
+        sid = self._session_id
         audio_bytes = self._audio_buffer
         bytes_per_second = (
             self._audio_rate * self._audio_width * self._audio_channels
@@ -139,9 +142,8 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         audio_duration = len(audio_bytes) / bytes_per_second
 
         if len(audio_bytes) == 0:
-            _LOGGER.debug("Empty audio buffer, returning empty transcript")
+            _LOGGER.debug("[%s] Empty audio buffer, returning empty transcript", sid)
             await self.write_event(Transcript(text="").event())
-            _LOGGER.debug("── Session complete (empty) ──")
             return
 
         stream_elapsed = 0.0
@@ -149,27 +151,25 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             stream_elapsed = (time.monotonic() - self._stream_start_time) * 1000
 
         _LOGGER.debug(
-            "AudioStop received: %.1fs of audio (%d bytes), "
+            "[%s] AudioStop received: %.1fs of audio (%d bytes), "
             "stream duration: %.0fms",
-            audio_duration,
-            len(audio_bytes),
-            stream_elapsed,
+            sid, audio_duration, len(audio_bytes), stream_elapsed,
         )
 
         # Wait for early verification if it was started, otherwise verify now
         if self._verify_task is not None:
-            _LOGGER.debug("Waiting for early verification result...")
+            _LOGGER.debug("[%s] Waiting for early verification result...", sid)
             wait_start = time.monotonic()
             result = await self._verify_task
             wait_elapsed = (time.monotonic() - wait_start) * 1000
             _LOGGER.debug(
-                "Early verification result ready (waited %.0fms)",
-                wait_elapsed,
+                "[%s] Early verification result ready (waited %.0fms)",
+                sid, wait_elapsed,
             )
         else:
             _LOGGER.debug(
-                "No early verification (only %.1fs buffered), verifying now",
-                audio_duration,
+                "[%s] No early verification (only %.1fs buffered), verifying now",
+                sid, audio_duration,
             )
             async with _MODEL_LOCK:
                 loop = asyncio.get_running_loop()
@@ -182,15 +182,13 @@ class SpeakerVerifyHandler(AsyncEventHandler):
 
         if result.is_match:
             _LOGGER.info(
-                "Speaker verified: %s (similarity=%.4f, threshold=%.2f), "
+                "[%s] Speaker verified: %s (similarity=%.4f, threshold=%.2f), "
                 "forwarding to ASR",
-                result.matched_speaker,
-                result.similarity,
-                result.threshold,
+                sid, result.matched_speaker, result.similarity, result.threshold,
             )
             if _LOGGER.isEnabledFor(logging.DEBUG):
                 for name, score in result.all_scores.items():
-                    _LOGGER.debug("  %s: %.4f", name, score)
+                    _LOGGER.debug("[%s]   %s: %.4f", sid, name, score)
 
             # Trim audio for ASR. This captures the full voice command
             # (which lives at the start of the buffer) while cutting off
@@ -200,15 +198,14 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             if len(audio_bytes) > max_asr_bytes:
                 asr_audio = audio_bytes[:max_asr_bytes]
                 _LOGGER.debug(
-                    "Forwarding first %.1fs of %.1fs audio to ASR",
-                    len(asr_audio) / bytes_per_second,
-                    audio_duration,
+                    "[%s] Forwarding first %.1fs of %.1fs audio to ASR",
+                    sid, len(asr_audio) / bytes_per_second, audio_duration,
                 )
             else:
                 asr_audio = audio_bytes
                 _LOGGER.debug(
-                    "Forwarding %.1fs of audio to ASR",
-                    audio_duration,
+                    "[%s] Forwarding %.1fs of audio to ASR",
+                    sid, audio_duration,
                 )
 
             transcript = await self._forward_to_upstream(asr_audio)
@@ -217,19 +214,16 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             if self._stream_start_time is not None:
                 total_elapsed = (time.monotonic() - self._stream_start_time) * 1000
             _LOGGER.info(
-                "Pipeline complete in %.0fms: \"%s\"",
-                total_elapsed,
-                transcript,
+                "[%s] Pipeline complete in %.0fms: \"%s\"",
+                sid, total_elapsed, transcript,
             )
         else:
             total_elapsed = 0.0
             if self._stream_start_time is not None:
                 total_elapsed = (time.monotonic() - self._stream_start_time) * 1000
             _LOGGER.warning(
-                "Speaker rejected in %.0fms (best=%.4f, threshold=%.2f, scores=%s)",
-                total_elapsed,
-                result.similarity,
-                result.threshold,
+                "[%s] Speaker rejected in %.0fms (best=%.4f, threshold=%.2f, scores=%s)",
+                sid, total_elapsed, result.similarity, result.threshold,
                 {n: f"{s:.4f}" for n, s in result.all_scores.items()},
             )
             await self.write_event(Transcript(text="").event())
