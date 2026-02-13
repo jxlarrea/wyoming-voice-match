@@ -504,6 +504,25 @@ class SpeakerVerifier:
                         kept_regions.append(region_audio)
                 else:
                     kept_regions.append(region_audio)
+            elif (end_frame - start_frame) * frame_ms / 1000 >= sub_scan_min_seconds:
+                # Region failed as a whole, but it's long enough that
+                # the speaker's voice may be buried inside a larger blob
+                # of background audio. Scan with sliding window to rescue
+                # any sub-segments that match.
+                _LOGGER.debug(
+                    "  Region %.1f-%.1fs failed (%.2f), scanning for buried voice",
+                    start_frame * frame_ms / 1000, end_frame * frame_ms / 1000,
+                    similarity,
+                )
+                rescued = self._trim_region(
+                    audio_bytes, start_frame, end_frame,
+                    frame_size, bytes_per_sample, voiceprint,
+                    sample_rate, similarity_threshold,
+                    sub_scan_window_seconds, sub_scan_step_seconds,
+                    frame_ms,
+                )
+                if rescued is not None:
+                    kept_regions.append(rescued)
 
         elapsed_ms = (time.monotonic() - start_time) * 1000
 
