@@ -451,7 +451,7 @@ Normalizing to unit vectors means `1 - cosine(a, b)` simplifies to a dot product
 
 ## Appendix: Complete Source Files
 
-All source files are included below so this document is fully self-contained. A future developer or LLM can recreate the entire project from these appendices alone.
+All source files are included below so this document is fully self-contained.
 
 ### wyoming_voice_match/__init__.py
 
