@@ -457,6 +457,12 @@ class SpeakerVerifier:
         kept_regions = []
         region_scores = []
 
+        # Minimum region length for sub-region scanning (seconds)
+        sub_scan_min_seconds = 3.0
+        # Window size for sub-region scanning (seconds)
+        sub_scan_window_seconds = 1.5
+        sub_scan_step_seconds = 0.5
+
         for start_frame, end_frame in regions:
             # Ensure minimum 1s for reliable embedding
             duration_frames = end_frame - start_frame
@@ -476,7 +482,22 @@ class SpeakerVerifier:
             region_scores.append((start_frame, end_frame, similarity))
 
             if similarity >= similarity_threshold:
-                kept_regions.append(region_audio)
+                region_duration = (end_frame - start_frame) * frame_ms / 1000
+                if region_duration >= sub_scan_min_seconds:
+                    # Stage 3: Sub-region scan to trim non-speaker edges
+                    trimmed = self._trim_region(
+                        audio_bytes, start_frame, end_frame,
+                        frame_size, bytes_per_sample, voiceprint,
+                        sample_rate, similarity_threshold,
+                        sub_scan_window_seconds, sub_scan_step_seconds,
+                        frame_ms,
+                    )
+                    if trimmed is not None:
+                        kept_regions.append(trimmed)
+                    else:
+                        kept_regions.append(region_audio)
+                else:
+                    kept_regions.append(region_audio)
 
         elapsed_ms = (time.monotonic() - start_time) * 1000
 
@@ -502,6 +523,106 @@ class SpeakerVerifier:
             return audio_bytes
 
         return b"".join(kept_regions)
+
+    def _trim_region(
+        self,
+        audio_bytes: bytes,
+        start_frame: int,
+        end_frame: int,
+        frame_size: int,
+        bytes_per_sample: int,
+        voiceprint: np.ndarray,
+        sample_rate: int,
+        similarity_threshold: float,
+        window_seconds: float,
+        step_seconds: float,
+        frame_ms: int,
+    ) -> Optional[bytes]:
+        """Trim a long kept region by scanning with a sliding window.
+
+        Scans from the start to find where the speaker's voice begins,
+        and from the end to find where it ends. Returns only the portion
+        between those boundaries.
+
+        Returns None if trimming would produce no audio.
+        """
+        region_start_sec = start_frame * frame_ms / 1000
+        region_end_sec = end_frame * frame_ms / 1000
+        region_duration = region_end_sec - region_start_sec
+
+        window_bytes = int(window_seconds * sample_rate * bytes_per_sample)
+        step_bytes = int(step_seconds * sample_rate * bytes_per_sample)
+        min_window_bytes = int(1.0 * sample_rate * bytes_per_sample)
+
+        start_byte = start_frame * frame_size * bytes_per_sample
+        end_byte = end_frame * frame_size * bytes_per_sample
+        region_audio = audio_bytes[start_byte:end_byte]
+        region_len = len(region_audio)
+
+        if region_len < window_bytes:
+            return None
+
+        # Scan forward to find where speaker starts
+        speaker_start_byte = 0
+        found_start = False
+        pos = 0
+        while pos + window_bytes <= region_len:
+            chunk = region_audio[pos:pos + window_bytes]
+            embedding = self._extract_embedding(chunk, sample_rate)
+            sim = float(1.0 - cosine(embedding, voiceprint))
+            chunk_start_sec = region_start_sec + pos / (sample_rate * bytes_per_sample)
+            chunk_end_sec = chunk_start_sec + window_seconds
+            _LOGGER.debug(
+                "  Trim scan forward %.1f-%.1fs: %.4f %s",
+                chunk_start_sec, chunk_end_sec, sim,
+                "SPEAKER" if sim >= similarity_threshold else "",
+            )
+            if sim >= similarity_threshold:
+                speaker_start_byte = pos
+                found_start = True
+                break
+            pos += step_bytes
+
+        if not found_start:
+            return None
+
+        # Scan backward to find where speaker ends
+        speaker_end_byte = region_len
+        pos = region_len - window_bytes
+        while pos >= speaker_start_byte:
+            chunk = region_audio[pos:pos + window_bytes]
+            if len(chunk) < min_window_bytes:
+                pos -= step_bytes
+                continue
+            embedding = self._extract_embedding(chunk, sample_rate)
+            sim = float(1.0 - cosine(embedding, voiceprint))
+            chunk_start_sec = region_start_sec + pos / (sample_rate * bytes_per_sample)
+            chunk_end_sec = chunk_start_sec + len(chunk) / (sample_rate * bytes_per_sample)
+            _LOGGER.debug(
+                "  Trim scan backward %.1f-%.1fs: %.4f %s",
+                chunk_start_sec, chunk_end_sec, sim,
+                "SPEAKER" if sim >= similarity_threshold else "",
+            )
+            if sim >= similarity_threshold:
+                speaker_end_byte = pos + window_bytes
+                break
+            pos -= step_bytes
+
+        trimmed = region_audio[speaker_start_byte:speaker_end_byte]
+        if len(trimmed) < min_window_bytes:
+            return None
+
+        trimmed_start_sec = region_start_sec + speaker_start_byte / (sample_rate * bytes_per_sample)
+        trimmed_end_sec = region_start_sec + speaker_end_byte / (sample_rate * bytes_per_sample)
+        _LOGGER.debug(
+            "  Trimmed %.1f-%.1fs -> %.1f-%.1fs (%.1fs -> %.1fs)",
+            region_start_sec, region_end_sec,
+            trimmed_start_sec, trimmed_end_sec,
+            region_duration,
+            trimmed_end_sec - trimmed_start_sec,
+        )
+
+        return trimmed
 
     def extract_embedding(self, audio_bytes: bytes, sample_rate: int = 16000) -> np.ndarray:
         """Extract a speaker embedding from audio. Public API for enrollment."""
