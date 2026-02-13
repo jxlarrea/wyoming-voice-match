@@ -43,16 +43,21 @@ class SpeakerVerifier:
         voiceprints_dir: str,
         model_dir: str = "/data/models",
         device: str = "cuda",
-        threshold: float = 0.30,
+        threshold: float = 0.20,
         max_verify_seconds: float = 5.0,
         window_seconds: float = 3.0,
         step_seconds: float = 1.5,
     ) -> None:
         self.threshold = threshold
-        self.device = device
         self.max_verify_seconds = max_verify_seconds
         self.window_seconds = window_seconds
         self.step_seconds = step_seconds
+
+        # Auto-detect device: use CUDA if available and requested, fall back to CPU
+        if device == "cuda" and not torch.cuda.is_available():
+            _LOGGER.warning("CUDA requested but not available, falling back to CPU")
+            device = "cpu"
+        self.device = device
 
         # Load the pretrained ECAPA-TDNN model
         run_opts = {"device": device} if device == "cuda" else {}

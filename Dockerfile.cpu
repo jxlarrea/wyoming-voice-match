@@ -15,8 +15,11 @@ RUN apt-get update && \
 
 # Install Python dependencies (CPU-only torch from PyTorch index)
 COPY requirements.cpu.txt .
+# Install torch CPU. We pin versions to ensure torchaudio has list_audio_backends
+# which SpeechBrain requires at import time.
 RUN pip install --no-cache-dir \
-        torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
+        torch==2.4.1+cpu torchaudio==2.4.1+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir soundfile && \
     pip install --no-cache-dir -r requirements.cpu.txt
 
 # Copy application code

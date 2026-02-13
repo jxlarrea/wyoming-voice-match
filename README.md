@@ -75,7 +75,6 @@ services:
       - UPSTREAM_URI=tcp://wyoming-faster-whisper:10300
       - VERIFY_THRESHOLD=0.20
       - LISTEN_URI=tcp://0.0.0.0:10350
-      - DEVICE=cuda
       - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
     deploy:
@@ -103,7 +102,6 @@ services:
       - UPSTREAM_URI=tcp://wyoming-faster-whisper:10300
       - VERIFY_THRESHOLD=0.20
       - LISTEN_URI=tcp://0.0.0.0:10350
-      - DEVICE=cpu
       - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
 ```
@@ -209,7 +207,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `UPSTREAM_URI` | `tcp://localhost:10300` | Wyoming URI of your real ASR service |
 | `VERIFY_THRESHOLD` | `0.20` | Cosine similarity threshold for speaker verification (0.0–1.0) |
 | `LISTEN_URI` | `tcp://0.0.0.0:10350` | URI this service listens on |
-| `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`) |
+| `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`). Auto-detects: falls back to CPU if CUDA is unavailable |
 | `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |
 | `LOG_LEVEL` | `DEBUG` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `MAX_VERIFY_SECONDS` | `5.0` | Seconds of audio to buffer before starting speaker verification |
@@ -293,7 +291,6 @@ services:
     environment:
       - UPSTREAM_URI=tcp://wyoming-faster-whisper:10300
       - VERIFY_THRESHOLD=0.20
-      - DEVICE=cuda
     deploy:
       resources:
         reservations:
@@ -303,7 +300,7 @@ services:
               capabilities: [gpu]
 ```
 
-For CPU-only usage, replace the image tag with `jxlarrea/wyoming-voice-match:cpu`, remove the `deploy` section, and set `DEVICE=cpu`.
+For CPU-only usage, replace the image tag with `jxlarrea/wyoming-voice-match:cpu` and remove the `deploy` section.
 
 ## Performance
 

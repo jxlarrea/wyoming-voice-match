@@ -172,29 +172,75 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 _LOGGER.debug("[%s]   %s: %.4f", sid, name, score)
 
         # Use the live buffer (not the verification snapshot). After
-        # verification passes, wait for the buffer to reach asr_max_seconds
-        # so we capture the full command. The noise-aware trim will then
-        # decide whether to send everything (quiet) or trim (noisy).
+        # verification passes, wait for the user to stop speaking before
+        # forwarding. We detect this by monitoring the RMS energy of the
+        # most recent audio — when it drops below the speech level, the
+        # user has finished and only background noise (or silence) remains.
         bytes_per_second = (
             self._audio_rate * self._audio_width * self._audio_channels
         )
         target_bytes = int(self.asr_max_seconds * bytes_per_second)
 
-        if len(self._audio_buffer) < target_bytes:
+        # Get the speech peak energy from verification to calibrate
+        # what "user stopped speaking" looks like
+        speech_peak = self._get_speech_peak(result, bytes_per_second)
+
+        if speech_peak and len(self._audio_buffer) < target_bytes:
+            # Speech was detected — wait for the user to finish speaking
+            # "Finished" = recent audio energy dropped well below speech peak
+            stop_threshold = speech_peak * 0.10  # 10% of speech peak
+            check_window = int(0.5 * bytes_per_second)  # check last 500ms
+            min_quiet_checks = 3  # need 3 consecutive quiet checks (300ms)
+            quiet_count = 0
+
             wait_needed = (target_bytes - len(self._audio_buffer)) / bytes_per_second
             _LOGGER.debug(
-                "[%s] Waiting up to %.1fs for buffer to reach %.1fs",
-                sid, wait_needed, self.asr_max_seconds,
+                "[%s] Waiting up to %.1fs for speech to end "
+                "(peak=%.0f, stop_threshold=%.0f)",
+                sid, wait_needed, speech_peak, stop_threshold,
+            )
+            poll_interval = 0.1
+            waited = 0.0
+
+            while len(self._audio_buffer) < target_bytes and waited < wait_needed:
+                await asyncio.sleep(poll_interval)
+                waited += poll_interval
+
+                # Check if recent audio has gone quiet
+                if len(self._audio_buffer) >= check_window:
+                    tail = self._audio_buffer[-check_window:]
+                    tail_samples = np.frombuffer(tail, dtype=np.int16).astype(np.float32)
+                    tail_rms = float(np.sqrt(np.mean(tail_samples ** 2)))
+
+                    if tail_rms < stop_threshold:
+                        quiet_count += 1
+                        if quiet_count >= min_quiet_checks:
+                            _LOGGER.debug(
+                                "[%s] Speech ended (tail RMS=%.0f < %.0f), "
+                                "forwarding after %.1fs wait",
+                                sid, tail_rms, stop_threshold, waited,
+                            )
+                            break
+                    else:
+                        quiet_count = 0  # reset — still speaking or loud TV
+
+            if waited >= wait_needed:
+                _LOGGER.debug(
+                    "[%s] Buffer reached %.1fs limit after %.1fs wait",
+                    sid, self.asr_max_seconds, waited,
+                )
+        elif len(self._audio_buffer) < target_bytes:
+            # No speech peak detected — just wait for buffer to fill
+            wait_needed = (target_bytes - len(self._audio_buffer)) / bytes_per_second
+            _LOGGER.debug(
+                "[%s] No speech peak, waiting up to %.1fs for buffer",
+                sid, wait_needed,
             )
             poll_interval = 0.1
             waited = 0.0
             while len(self._audio_buffer) < target_bytes and waited < wait_needed:
                 await asyncio.sleep(poll_interval)
                 waited += poll_interval
-            _LOGGER.debug(
-                "[%s] Buffer now %.1fs after waiting %.1fs",
-                sid, len(self._audio_buffer) / bytes_per_second, waited,
-            )
 
         forward_audio = bytes(self._audio_buffer)
         asr_audio = self._trim_for_asr(forward_audio, result, bytes_per_second)
@@ -306,6 +352,34 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             )
             await self.write_event(Transcript(text="").event())
             self._responded = True
+
+    def _get_speech_peak(
+        self,
+        result: VerificationResult,
+        bytes_per_second: int,
+    ) -> Optional[float]:
+        """Get the peak RMS energy of the detected speech segment.
+
+        Used to calibrate "end of speech" detection — when recent audio
+        drops well below this level, the user has stopped talking.
+        Returns None if no speech segment was detected.
+        """
+        if result.speech_audio is None:
+            return None
+
+        samples = np.frombuffer(result.speech_audio, dtype=np.int16).astype(np.float32)
+        if len(samples) == 0:
+            return None
+
+        # Compute RMS in 50ms frames and return the peak
+        frame_size = int(self._audio_rate * 0.05)
+        num_frames = len(samples) // frame_size
+        if num_frames == 0:
+            return float(np.sqrt(np.mean(samples ** 2)))
+
+        frames = samples[:num_frames * frame_size].reshape(num_frames, frame_size)
+        rms = np.sqrt(np.mean(frames ** 2, axis=1))
+        return float(np.max(rms))
 
     # RMS energy above this level in the tail indicates background noise (TV, radio)
     _NOISE_FLOOR_RMS = 500.0

@@ -11,7 +11,6 @@ services:
       - UPSTREAM_URI=tcp://wyoming-faster-whisper:10300
       - VERIFY_THRESHOLD=0.20
       - LISTEN_URI=tcp://0.0.0.0:10350
-      - DEVICE=cpu
       - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
       # - MAX_VERIFY_SECONDS=5.0   # First-pass verification window
