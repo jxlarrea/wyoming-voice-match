@@ -177,6 +177,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `MAX_VERIFY_SECONDS` | `5.0` | Duration of audio (in seconds) used for the first verification pass |
 | `WINDOW_SECONDS` | `3.0` | Sliding window size (in seconds) for the fallback verification pass |
 | `STEP_SECONDS` | `1.5` | Step size (in seconds) between sliding windows |
+| `ASR_MAX_SECONDS` | `10.0` | Max audio duration (in seconds) forwarded to the upstream ASR |
 
 ### Tuning the Threshold
 

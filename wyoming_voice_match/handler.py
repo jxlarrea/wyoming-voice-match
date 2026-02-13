@@ -33,6 +33,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         wyoming_info: Info,
         verifier: SpeakerVerifier,
         upstream_uri: str,
+        asr_max_seconds: float = 10.0,
         *args,
         **kwargs,
     ) -> None:
@@ -41,6 +42,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self.wyoming_info = wyoming_info
         self.verifier = verifier
         self.upstream_uri = upstream_uri
+        self.asr_max_seconds = asr_max_seconds
 
         # Per-connection state
         self._audio_buffer = bytes()
@@ -190,14 +192,24 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 for name, score in result.all_scores.items():
                     _LOGGER.debug("  %s: %.4f", name, score)
 
-            # Forward full audio to ASR. The speech segment is only used
-            # for speaker verification — the full buffer contains the
-            # complete command needed for accurate transcription.
-            asr_audio = audio_bytes
-            _LOGGER.debug(
-                "Forwarding %.1fs of audio to ASR",
-                len(asr_audio) / bytes_per_second,
-            )
+            # Trim audio for ASR. This captures the full voice command
+            # (which lives at the start of the buffer) while cutting off
+            # trailing background noise (e.g., TV audio that keeps the
+            # VAD stream open).
+            max_asr_bytes = int(self.asr_max_seconds * bytes_per_second)
+            if len(audio_bytes) > max_asr_bytes:
+                asr_audio = audio_bytes[:max_asr_bytes]
+                _LOGGER.debug(
+                    "Forwarding first %.1fs of %.1fs audio to ASR",
+                    len(asr_audio) / bytes_per_second,
+                    audio_duration,
+                )
+            else:
+                asr_audio = audio_bytes
+                _LOGGER.debug(
+                    "Forwarding %.1fs of audio to ASR",
+                    audio_duration,
+                )
 
             transcript = await self._forward_to_upstream(asr_audio)
             await self.write_event(Transcript(text=transcript).event())

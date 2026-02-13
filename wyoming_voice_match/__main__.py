@@ -81,6 +81,12 @@ def get_args() -> argparse.Namespace:
         default=float(os.environ.get("STEP_SECONDS", "1.5")),
         help="Sliding window step in seconds (default: 1.5)",
     )
+    parser.add_argument(
+        "--asr-max-seconds",
+        type=float,
+        default=float(os.environ.get("ASR_MAX_SECONDS", "10.0")),
+        help="Max audio duration (seconds) forwarded to upstream ASR (default: 10.0)",
+    )
 
     return parser.parse_args()
 
@@ -181,6 +187,7 @@ async def main() -> None:
             wyoming_info,
             verifier,
             args.upstream_uri,
+            args.asr_max_seconds,
         )
     )
 
