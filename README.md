@@ -1,65 +1,804 @@
-# Wyoming Voice Match
+# Design & Architecture
 
-A [Wyoming protocol](https://github.com/OHF-Voice/wyoming) ASR proxy that verifies speaker identity and extracts your voice from background noise before forwarding audio to a downstream speech-to-text service. Designed for [Home Assistant](https://www.home-assistant.io/) voice pipelines to prevent false activations from TVs, radios, and other people - and to deliver clean transcripts even in noisy environments.
+Complete technical specification for Wyoming Voice Match. This document contains enough detail to rebuild the project from scratch.
 
-## The Problem
-
-Home Assistant voice satellites listen for a wake word, then stream audio to a speech-to-text service. But the satellite microphone picks up everything - your voice, the TV in the background, other people talking. This causes two issues:
-
-1. **False activations**: The TV says something that triggers a command
-2. **Noisy transcripts**: Your voice command gets mixed with TV dialogue, producing garbage like *"What time is it? People look at you like some kind of service freak"*
-
-Wyoming Voice Match solves both: it verifies that the audio contains **your voice** before allowing it through, and it uses voiceprint-based speaker extraction to isolate your command - removing TV dialogue and other speakers - before sending clean audio to the speech-to-text service.
-
-## How It Works
-
-Wyoming Voice Match sits between Home Assistant and your ASR (speech-to-text) service. When a wake word is detected, Home Assistant opens a connection and starts streaming audio. Here's what happens:
+## Project Structure
 
 ```
-┌──────────┐     ┌─────────────────┐     ┌───────────────────────┐     ┌──────────────┐
-│   Mic    │────▶│  Wake Word      │────▶│  Wyoming Voice Match  │────▶│ ASR Service  │
-│ (Device) │     │  Detection      │     │                       │     │ (Transcribe) │
-└──────────┘     └─────────────────┘     │  1. Buffer audio      │     └──────────────┘
-                                         │  2. Verify speaker    │
-                                         │  3. Wait for stream   │
-                                         │  4. Extract speaker   │
-                                         │  5. Forward to ASR    │
-                                         └───────────────────────┘
+wyoming-voice-match/
+├── wyoming_voice_match/          # Main Python package
+│   ├── __init__.py               # Version string (__version__ = "1.0.0")
+│   ├── __main__.py               # Entry point, arg parsing, server setup
+│   ├── handler.py                # Wyoming event handler (ASR proxy logic)
+│   └── verify.py                 # ECAPA-TDNN speaker verification + extraction
+├── scripts/
+│   ├── __init__.py               # Empty, makes scripts a package
+│   ├── demo.py                   # Pipeline demo CLI (verify + extract a WAV file)
+│   ├── enroll.py                 # Voice enrollment CLI
+│   └── test_verify.py            # Threshold tuning CLI
+├── tools/
+│   └── record_samples.ps1        # Windows PowerShell recording helper
+├── Dockerfile                    # GPU image (CUDA 12.4 + cuDNN, multi-stage)
+├── Dockerfile.cpu                # CPU image (python:3.11-slim)
+├── docker-compose.yml            # GPU compose config
+├── docker-compose.cpu.yml        # CPU compose config
+├── requirements.txt              # GPU Python deps (torch installed separately via cu121 index)
+├── requirements.cpu.txt          # CPU Python deps (torch from default PyPI)
+├── LICENSE                       # MIT
+├── README.md                     # User-facing documentation
+└── DESIGN.md                     # This file
 ```
 
-### Step by step
+## Core Concept
 
-1. **Buffer audio** - audio streams in from Home Assistant after the wake word is detected
-2. **Verify speaker** - after 5 seconds, an energy analysis isolates the loudest segment (your voice near the mic) and compares it against your enrolled voiceprint using an [ECAPA-TDNN](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb) neural network. If it doesn't match any enrolled speaker, the pipeline is silently stopped with an empty transcript
-3. **Wait for stream** - once verified, the proxy continues buffering audio until the satellite's VAD signals the end of the stream, capturing your complete command regardless of length
-4. **Extract speaker** - the full audio buffer is split into speech regions using energy analysis, then each region is verified against your voiceprint. Only regions matching your voice are kept; TV dialogue and other speakers are discarded
-5. **Forward to ASR** - the cleaned audio (only your voice) is sent to the speech-to-text service for transcription
+Wyoming Voice Match is a Wyoming protocol ASR proxy that sits between Home Assistant and an ASR (speech-to-text) service. It solves the "TV problem": when a satellite microphone picks up both the user's voice and TV/radio audio, the ASR gets garbage transcripts mixing voice commands with TV dialogue.
 
-**The result:**
+The solution has two parts:
+1. **Speaker verification** - confirm the audio contains an enrolled speaker's voice (rejects TV-only triggers)
+2. **Speaker extraction** - isolate only the enrolled speaker's voice segments from the full audio buffer, discarding TV/radio/other people before sending to ASR
 
-- In a quiet room, Voice Match adds only milliseconds of overhead to your existing pipeline - verification is nearly instant
-- With a TV blaring, speaker extraction removes TV dialogue from the audio, delivering clean transcripts like *"What time is it?"* instead of *"What time is it? So I've been all for it and just..."*
-- Commands of any length are fully captured - no fixed time limits
-- TV audio and other speakers are rejected based on voiceprint mismatch, not energy levels
+## Dependencies
 
-## Requirements
+### Python Packages
 
-- Docker and Docker Compose
-- NVIDIA GPU (recommended) or CPU
-- A downstream Wyoming-compatible ASR service (e.g., [wyoming-faster-whisper](https://github.com/rhasspy/wyoming-faster-whisper), [wyoming-onnx-asr](https://github.com/tboby/wyoming-onnx-asr))
+**requirements.txt** (GPU - torch/torchaudio installed separately from `https://download.pytorch.org/whl/cu121`):
+```
+wyoming==1.8.0
+speechbrain>=1.0.0
+scipy>=1.11.0
+numpy>=1.24.0
+requests>=2.28.0
+huggingface_hub<0.27.0
+```
 
-## Quick Start
+**requirements.cpu.txt** (CPU - torch NOT included here, installed separately in Dockerfile.cpu with pinned versions):
+```
+wyoming==1.8.0
+speechbrain>=1.0.0
+scipy>=1.11.0
+numpy>=1.24.0
+requests>=2.28.0
+huggingface_hub<0.27.0
+```
 
-### 1. Create a Project Directory
+Key dependency notes:
+- `huggingface_hub<0.27.0` - pinned to avoid a breaking change in 0.27+ that affects SpeechBrain's model loading
+- `wyoming==1.8.0` - the Wyoming protocol library (AsyncServer, AsyncEventHandler, AsyncClient, event types)
+- `speechbrain` - provides `EncoderClassifier` for ECAPA-TDNN inference
+- `scipy` - only used for `scipy.spatial.distance.cosine`
+- `torchaudio` - only used in enrollment/test scripts for loading WAV files (the main service receives raw PCM bytes)
 
+### System Packages (in Docker)
+
+- `libsndfile1` - required by SpeechBrain/torchaudio for audio I/O
+- `ffmpeg` - used by enrollment script for format conversion
+- `libgomp1` - OpenMP runtime (GPU image only, required by torch)
+- `soundfile` - Python package, CPU image only, provides audio backend for torchaudio
+
+## Pipeline Architecture
+
+### Two Execution Paths
+
+The handler has two execution paths depending on audio length:
+
+**Early Pipeline** (`_run_early_pipeline`) - triggered when buffer reaches `MAX_VERIFY_SECONDS` (default 5.0s):
+1. Verify speaker identity using first 5s snapshot
+2. If verified, set `_responded = True` and wait for AudioStop
+3. When AudioStop arrives, run speaker extraction on full buffer
+4. Forward extracted audio to ASR
+5. Return transcript to Home Assistant
+
+**Sync Pipeline** (`_process_audio_sync`) - triggered at AudioStop if early pipeline hasn't responded:
+1. Used for short audio (< 5s, quiet room where AudioStop arrives quickly)
+2. Verify speaker on full buffer
+3. If verified, forward full buffer to ASR (no extraction needed - quiet room)
+4. Return transcript or empty string
+
+### Speaker Verification (Three-Pass Strategy)
+
+The `verify()` method uses multiple passes to handle noisy environments:
+
+**Pass 1 - Speech segment:** Energy analysis finds the loudest 1s+ segment in the audio (likely the user's voice near the mic). Extract ECAPA-TDNN embedding from just that segment. If it matches a voiceprint above threshold → accept.
+
+**Pass 2 - First-N seconds:** If pass 1 fails, verify the first `MAX_VERIFY_SECONDS` of audio as a single chunk. This works when the voice is distributed across the audio rather than concentrated. If it matches → accept.
+
+**Pass 3 - Sliding window:** If passes 1 and 2 fail, scan the full audio with overlapping windows (default 3.0s window, 1.5s step). This catches speech that may be at an arbitrary position. Best score wins.
+
+The speech segment from pass 1 is preserved in the `VerificationResult` for use by the extraction stage.
+
+### Speaker Extraction (Two-Stage)
+
+After verification passes and AudioStop arrives, `extract_speaker_audio()` isolates the enrolled speaker's voice:
+
+**Stage 1 - Energy-based speech detection:**
+- Split buffer into 50ms frames, compute RMS energy per frame
+- Determine noise floor using 10th percentile of frame energies × 5 (minimum 500)
+- Find contiguous regions of high-energy frames (with 300ms gap bridging)
+- Output: list of (start_frame, end_frame) speech regions
+
+**Stage 2 - Voiceprint verification per region:**
+- For each speech region, ensure minimum 1s length (expand symmetrically if shorter)
+- Extract ECAPA-TDNN embedding from the region
+- Compare against enrolled speaker's voiceprint via cosine similarity
+- Keep regions with similarity ≥ `threshold * 0.5` (half the verification threshold, more lenient)
+- Concatenate kept regions as the final output
+
+**Why this works:** The user's voice near the mic produces embeddings matching their voiceprint (similarity 0.20-0.55). TV speakers produce completely different embeddings (similarity -0.04 to 0.07). The voiceprint comparison cleanly separates these regardless of volume overlap.
+
+**Key parameters:**
+- Frame size for energy analysis: 50ms
+- Gap bridging: 300ms (joins speech regions separated by brief pauses)
+- Minimum region length for embedding: 1.0s (shorter segments produce unreliable embeddings)
+- Extraction similarity threshold: `VERIFY_THRESHOLD * 0.5` (default 0.10)
+- Noise floor: 10th percentile of frame RMS × 5, minimum 500
+
+### AudioStop Synchronization
+
+Critical implementation detail: the early pipeline must wait for the full audio stream before running extraction. This is achieved with `asyncio.Event`:
+
+- `_audio_stopped = asyncio.Event()` - created fresh per session in AudioStart handler
+- Set by the AudioStop handler (always, regardless of `_responded` state)
+- Awaited by `_run_early_pipeline` with 30s timeout
+- Audio chunks continue buffering after `_responded = True` (important: the AudioChunk handler must NOT skip buffering when responded)
+
+## Entry Point (__main__.py)
+
+### Argument Parsing
+
+All arguments have environment variable fallbacks for Docker configuration:
+
+| CLI Flag | Env Var | Default | Description |
+|---|---|---|---|
+| `--uri` | `LISTEN_URI` | `tcp://0.0.0.0:10350` | Wyoming server listen URI |
+| `--upstream-uri` | `UPSTREAM_URI` | `tcp://localhost:10300` | Upstream ASR service URI |
+| `--voiceprints-dir` | `VOICEPRINTS_DIR` | `/data/voiceprints` | Directory with .npy voiceprints |
+| `--threshold` | `VERIFY_THRESHOLD` | `0.20` | Cosine similarity threshold |
+| `--device` | `DEVICE` | `cuda` | `cuda` or `cpu` (auto-detects, falls back to cpu) |
+| `--model-dir` | `MODEL_DIR` | `/data/models` | Model cache directory |
+| `--debug` | `LOG_LEVEL=DEBUG` | `INFO` | Enable debug logging |
+| `--max-verify-seconds` | `MAX_VERIFY_SECONDS` | `5.0` | Early verification trigger |
+| `--window-seconds` | `VERIFY_WINDOW_SECONDS` | `3.0` | Sliding window size |
+| `--step-seconds` | `VERIFY_STEP_SECONDS` | `1.5` | Sliding window step |
+
+### Startup Sequence
+
+1. Parse args
+2. Configure logging (DEBUG or INFO)
+3. Validate voiceprints directory exists (exit 1 if not)
+4. Create `SpeakerVerifier` - loads ECAPA-TDNN model and all .npy voiceprints
+5. Validate at least one voiceprint loaded (exit 1 if not)
+6. Build `wyoming.info.Info` with ASR program/model metadata
+7. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
+
+The handler factory uses `functools.partial` to pass `wyoming_info`, `verifier`, and `upstream_uri` to each new handler instance.
+
+### Wyoming Service Info
+
+The service registers as an ASR program named `"voice-match"` with model `"voice-match-proxy"`, language `["en"]`. This makes it appear as a standard STT service in Home Assistant.
+
+## Handler (handler.py)
+
+### Class: SpeakerVerifyHandler
+
+Extends `wyoming.server.AsyncEventHandler`. One instance per TCP connection.
+
+**Module-level state:**
+- `_MODEL_LOCK: asyncio.Lock` - prevents concurrent ECAPA-TDNN inference across all handlers
+
+**Instance state:**
+- `wyoming_info: Info` - service metadata for Describe responses
+- `verifier: SpeakerVerifier` - shared verifier instance
+- `upstream_uri: str` - ASR service URI
+- `_audio_buffer: bytes` - accumulated PCM audio (keeps growing even after verification)
+- `_audio_rate: int` - sample rate (default 16000)
+- `_audio_width: int` - bytes per sample (default 2 = 16-bit)
+- `_audio_channels: int` - channel count (default 1 = mono)
+- `_language: Optional[str]` - language from Transcribe event
+- `_verify_task: Optional[asyncio.Task]` - background verification task
+- `_verify_started: bool` - whether early verification was triggered
+- `_responded: bool` - whether transcript was already sent
+- `_stream_start_time: Optional[float]` - monotonic timestamp for latency tracking
+- `_session_id: str` - 8-char hex UUID for log correlation
+- `_audio_stopped: asyncio.Event` - signals that AudioStop was received
+
+### Event Handling Flow
+
+```
+handle_event(event) dispatches by event type:
+
+Describe → write Info event back (service discovery)
+Transcribe → store language preference
+AudioStart → reset all per-stream state (including _audio_stopped)
+AudioChunk → ALWAYS append to buffer, check early verify trigger if not yet started
+AudioStop → set _audio_stopped event, then either log (if responded) or call _process_audio_sync
+```
+
+**AudioChunk handler (critical detail):**
+1. Always append chunk audio to `_audio_buffer` regardless of `_responded` state
+2. Only check early verification trigger if `not _verify_started and not _responded`
+3. If `buffered_seconds >= max_verify_seconds`: set `_verify_started = True`, snapshot buffer, create `_run_early_pipeline` task
+
+**AudioStop handler:**
+1. Always set `_audio_stopped.set()` (even if already responded)
+2. If `_responded` is True, log and return
+3. Otherwise call `_process_audio_sync()` (short audio fallback)
+
+### _run_early_pipeline(verify_audio: bytes)
+
+Called as a background task when 5s of audio is buffered.
+
+1. Acquire `_MODEL_LOCK`
+2. Run `verifier.verify(verify_audio, sample_rate)` in `run_in_executor`
+3. Release lock
+4. If rejected:
+   - Cache result in `_verify_result_cache`
+   - Return (wait for AudioStop to try full audio)
+5. If matched:
+   - Log speaker name, similarity, threshold
+   - Set `_responded = True` immediately (prevents AudioStop from triggering sync path)
+   - Await `_audio_stopped.wait()` with 30s timeout (waits for full stream)
+   - Snapshot full buffer
+   - Acquire `_MODEL_LOCK`
+   - Run `verifier.extract_speaker_audio(full_buffer, speaker_name, sample_rate)` in `run_in_executor`
+   - Release lock
+   - Forward extracted audio to upstream ASR with `_forward_to_upstream()`
+   - Write `Transcript` event back to HA
+   - Log total pipeline time
+
+### _process_audio_sync()
+
+Fallback path for short audio (AudioStop arrives before early verification triggers).
+
+1. If empty buffer → return empty transcript
+2. Check `_verify_result_cache` (early verify rejected, re-try with full audio)
+3. If no cache → first-time verification on full buffer
+4. If matched → forward full buffer to ASR (no extraction needed - quiet room path)
+5. If rejected → return empty transcript
+
+### _forward_to_upstream(audio_bytes: bytes) → str
+
+Sends audio to the upstream Wyoming ASR service:
+
+1. Open `AsyncClient` connection to `upstream_uri`
+2. Send `Transcribe` event (with language if set)
+3. Send `AudioStart` event (rate, width, channels)
+4. Stream audio in 100ms chunks
+5. Send `AudioStop`
+6. Read events until `Transcript` received
+7. Return transcript text (or empty string on error)
+
+## Verifier (verify.py)
+
+### Class: SpeakerVerifier
+
+**Constructor parameters:**
+- `voiceprints_dir: str` - path to directory of .npy files
+- `model_dir: str` - HuggingFace model cache
+- `device: str` - "cuda" or "cpu" (auto-falls-back to cpu if CUDA unavailable)
+- `threshold: float` - cosine similarity threshold (default 0.20)
+- `max_verify_seconds: float` - controls early verification trigger and first-N pass length
+- `window_seconds: float` - sliding window size for pass 3
+- `step_seconds: float` - sliding window step for pass 3
+
+**On construction:**
+1. Auto-detect CUDA: if device="cuda" but `torch.cuda.is_available()` is False → fall back to "cpu" with warning
+2. Load ECAPA-TDNN via `EncoderClassifier.from_hparams(source="speechbrain/spkrec-ecapa-voxceleb", ...)`
+3. Load all .npy voiceprints from the directory
+
+### VerificationResult dataclass
+
+```python
+@dataclass
+class VerificationResult:
+    is_match: bool
+    similarity: float
+    threshold: float
+    matched_speaker: Optional[str] = None
+    all_scores: Dict[str, float] = field(default_factory=dict)
+    speech_audio: Optional[bytes] = field(default=None, repr=False)
+    speech_start_sec: Optional[float] = None
+    speech_end_sec: Optional[float] = None
+```
+
+### Key Methods
+
+**`verify(audio_bytes, sample_rate) → VerificationResult`**
+Three-pass verification as described in Pipeline Architecture. Returns best result across all passes.
+
+**`extract_speaker_audio(audio_bytes, speaker_name, sample_rate, similarity_threshold?) → bytes`**
+Two-stage speaker extraction as described in Pipeline Architecture. Returns concatenated PCM of kept regions.
+
+**`_extract_speech_segment(audio_bytes, sample_rate) → Optional[Tuple[bytes, float, float]]`**
+Energy-based speech detection for verification pass 1:
+- 50ms frames, compute RMS energy per frame
+- Peak frame = loudest
+- Energy threshold = peak / 2
+- Find longest contiguous region above threshold
+- Expand to minimum 1s
+- Returns (segment_bytes, start_sec, end_sec)
+
+**`_verify_chunk(audio_bytes, sample_rate) → VerificationResult`**
+Core verification: extract embedding, compare against all voiceprints, return best match.
+
+**`_extract_embedding(audio_bytes, sample_rate) → np.ndarray`**
+Convert PCM to normalized float tensor, run through `classifier.encode_batch()`, return 192-dim numpy array.
+
+**`extract_embedding(audio_bytes, sample_rate) → np.ndarray`**
+Public wrapper of `_extract_embedding` for enrollment scripts.
+
+## Enrollment (scripts/enroll.py)
+
+CLI tool that generates voiceprints from WAV samples.
+
+**Usage:**
 ```bash
-mkdir wyoming-voice-match && cd wyoming-voice-match
-mkdir -p data/enrollment
+python -m scripts.enroll --speaker john    # Enroll from WAV files
+python -m scripts.enroll --list            # List enrolled speakers
+python -m scripts.enroll --delete john     # Delete voiceprint
 ```
 
-### 2. Create `docker-compose.yml`
+**Enrollment process:**
+1. Find audio files in `enrollment/<speaker>/` (supports .wav, .flac, .ogg, .mp3)
+2. Load ECAPA-TDNN model
+3. For each file: load audio, resample to 16kHz mono, extract embedding
+4. Average all embeddings: `np.mean(embeddings, axis=0)`
+5. L2-normalize the average: `voiceprint / np.linalg.norm(voiceprint)`
+6. Save as `voiceprints/<speaker>.npy`
 
-**GPU (recommended):**
+**Key detail:** The voiceprint is L2-normalized (unit vector). This means cosine similarity reduces to a simple dot product during verification.
+
+## Test Script (scripts/test_verify.py)
+
+CLI tool for tuning the similarity threshold:
+```bash
+python -m scripts.test_verify /path/to/test.wav --threshold 0.20
+```
+
+Loads a WAV file, extracts an embedding, and compares against all enrolled voiceprints. Displays a table of similarities with MATCH/REJECT indicators.
+
+## Demo Script (scripts/demo.py)
+
+CLI tool that runs the full verification and extraction pipeline on a WAV file, writing the extracted audio as a new WAV:
+```bash
+python -m scripts.demo --speaker john --input /data/test.wav --output /data/cleaned.wav
+```
+
+**Process:**
+1. Load input WAV (any sample rate or channel count - automatically resampled to 16kHz mono)
+2. Run full three-pass speaker verification, displaying similarity scores for all enrolled speakers
+3. Run two-stage speaker extraction (energy detection + voiceprint filtering per region)
+4. Write extracted audio (only the enrolled speaker's voice) as a WAV file
+5. Print summary: input/output duration, amount removed, per-region scores
+
+Debug logging is always enabled so the output shows the complete region-by-region breakdown including individual similarity scores, energy thresholds, and keep/drop decisions. The output WAV represents exactly what would be forwarded to the upstream ASR service during normal operation.
+
+## Docker Images
+
+### GPU Image (Dockerfile)
+
+Multi-stage build to minimize image size (~5GB):
+
+**Stage 1 (builder):** `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04`
+- Installs python3, python3-pip, python3-dev, libsndfile1
+- Installs torch and torchaudio from `https://download.pytorch.org/whl/cu121`
+- Installs remaining requirements from requirements.txt
+- Cleanup step removes ~2GB of redundant files:
+  - Triton (~600MB, not needed for inference)
+  - Duplicate NVIDIA pip packages (cublas, cuda_runtime, cudnn, etc.) that are already in the CUDA base image
+  - Duplicate CUDA libs from torch/lib (keeps cusparseLt)
+  - Static libs (.a files), include dirs, share dirs
+  - Unused pip packages (sympy, networkx)
+  - SpeechBrain recipes and tests directories
+  - All `__pycache__` directories
+
+**Stage 2 (runtime):** `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04`
+- Installs python3, libsndfile1, ffmpeg, libgomp1
+- Copies installed Python packages from builder
+- Copies application code (wyoming_voice_match/ and scripts/)
+- Creates /data directory structure (enrollment, voiceprints, models)
+- Entrypoint: `python -m wyoming_voice_match`
+
+### CPU Image (Dockerfile.cpu)
+
+Single-stage: `python:3.11-slim`
+- Installs libsndfile1, ffmpeg
+- Pins torch and torchaudio versions: `torch==2.4.1+cpu torchaudio==2.4.1+cpu` from `https://download.pytorch.org/whl/cpu`
+- Installs `soundfile` package (provides audio backend for torchaudio)
+- Installs remaining requirements from requirements.cpu.txt
+- Same application code and directory structure
+- Same entrypoint
+
+**Critical CPU note:** The torch/torchaudio versions must be pinned because the CPU PyTorch index can have stale torchaudio versions that lack `list_audio_backends`, which SpeechBrain requires at import time. The `soundfile` package is also required as the audio backend.
+
+### Data Volume
+
+The `/data` directory is mounted as a Docker volume and contains:
+- `/data/enrollment/<speaker>/` - WAV files for each enrolled speaker
+- `/data/voiceprints/<speaker>.npy` - generated voiceprint embeddings (192-dim numpy arrays)
+- `/data/models/spkrec-ecapa-voxceleb/` - cached ECAPA-TDNN model from HuggingFace
+- `/data/hf_cache/` - HuggingFace Hub cache (set via `HF_HOME` env var)
+
+## Concurrency Model
+
+- `AsyncEventHandler` processes events sequentially per connection
+- `_MODEL_LOCK` (module-level `asyncio.Lock`) serializes all ECAPA-TDNN inference
+- All model inference runs in `run_in_executor` to avoid blocking the event loop
+- Audio chunks continue to be buffered by the event loop while model inference runs in background
+- `_audio_stopped` event allows the early pipeline to wait for AudioStop without polling
+
+## Observed Performance Characteristics
+
+Based on real-world testing with TV background noise:
+
+- **Speaker verification:** 5-25ms on GPU (cached model), 200-500ms on CPU
+- **Speaker extraction:** 15-35ms on GPU for 10-15s buffer (4-6 speech regions)
+- **Your voice similarity scores:** 0.20-0.55 (varies with conditions)
+- **TV speaker similarity scores:** -0.04 to 0.07 (consistently near zero)
+- **Energy threshold (10th percentile × 5):** ~1000-2000 in quiet room, ~2000-4500 with TV
+- **Typical pipeline time with TV:** 8-14s (dominated by waiting for AudioStop from satellite)
+- **Typical pipeline time in quiet room:** 3-10s (AudioStop arrives quickly from satellite VAD)
+
+## Design Decisions & Rationale
+
+### Why voiceprint extraction instead of energy-based trimming?
+
+Early iterations tried various energy-based approaches to trim TV audio from the buffer:
+- **Fixed ASR_MAX_SECONDS cap:** Fails for variable-length commands
+- **Speech-end detection (RMS polling):** Fooled by TV pauses triggering false positives
+- **Energy threshold scanning:** TV and voice energy overlap in the 3000-12000 RMS range
+
+Energy analysis cannot distinguish voice from TV because they occupy the same energy range. Speaker embeddings can, because they capture voice identity regardless of volume.
+
+### Why wait for AudioStop instead of responding immediately?
+
+Earlier versions forwarded audio immediately after verification (at ~5s), which was fast but limited command length to 5s. The current approach waits for the satellite to finish streaming, then extracts the speaker's voice. This supports commands of any length.
+
+### Why is extraction similarity threshold half the verification threshold?
+
+Verification uses the full threshold (0.20) on clean, loudest-energy speech segments. Extraction needs to be more lenient (0.10) because:
+- Speech regions may contain partial words at boundaries
+- Quieter syllables produce weaker embeddings
+- Missing a region of the user's voice is worse than including a region (Whisper handles imperfect audio well)
+
+### Why L2-normalize voiceprints during enrollment?
+
+Normalizing to unit vectors means `1 - cosine(a, b)` simplifies to a dot product. More importantly, averaging multiple enrollment samples and normalizing produces a robust centroid that's equidistant from all sample embeddings.
+
+---
+
+## Appendix: Complete Source Files
+
+All source files are included below so this document is fully self-contained.
+
+### wyoming_voice_match/__init__.py
+
+```python
+"""Wyoming Voice Match - ASR proxy with speaker verification."""
+
+__version__ = "1.0.0"
+```
+
+### wyoming_voice_match/__main__.py
+
+```python
+"""Entry point for wyoming-voice-match."""
+
+import argparse
+import asyncio
+import logging
+import os
+import sys
+from functools import partial
+from pathlib import Path
+
+import numpy as np
+
+from wyoming.info import AsrModel, AsrProgram, Attribution, Info
+from wyoming.server import AsyncServer
+
+from . import __version__
+from .handler import SpeakerVerifyHandler
+from .verify import SpeakerVerifier
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def get_args() -> argparse.Namespace:
+    """Parse command-line arguments with environment variable fallbacks."""
+    parser = argparse.ArgumentParser(
+        description="Wyoming ASR proxy with speaker verification"
+    )
+    parser.add_argument(
+        "--uri",
+        default=os.environ.get("LISTEN_URI", "tcp://0.0.0.0:10350"),
+        help="URI to listen on (default: tcp://0.0.0.0:10350)",
+    )
+    parser.add_argument(
+        "--upstream-uri",
+        default=os.environ.get("UPSTREAM_URI", "tcp://localhost:10300"),
+        help="URI of upstream ASR service (default: tcp://localhost:10300)",
+    )
+    parser.add_argument(
+        "--voiceprints-dir",
+        default=os.environ.get("VOICEPRINTS_DIR", "/data/voiceprints"),
+        help="Directory containing voiceprint .npy files (default: /data/voiceprints)",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=float(os.environ.get("VERIFY_THRESHOLD", "0.20")),
+        help="Cosine similarity threshold for verification (default: 0.20)",
+    )
+    parser.add_argument(
+        "--device",
+        default=os.environ.get("DEVICE", "cuda"),
+        choices=["cuda", "cpu"],
+        help="Inference device (default: cuda)",
+    )
+    parser.add_argument(
+        "--model-dir",
+        default=os.environ.get("MODEL_DIR", "/data/models"),
+        help="Directory to cache the speaker model (default: /data/models)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=os.environ.get("LOG_LEVEL", "INFO").upper() == "DEBUG",
+        help="Enable debug logging",
+    )
+    parser.add_argument(
+        "--max-verify-seconds",
+        type=float,
+        default=float(os.environ.get("MAX_VERIFY_SECONDS", "5.0")),
+        help="Max audio duration (seconds) for first-pass verification (default: 5.0)",
+    )
+    parser.add_argument(
+        "--window-seconds",
+        type=float,
+        default=float(os.environ.get("VERIFY_WINDOW_SECONDS", "3.0")),
+        help="Sliding window size in seconds for fallback verification (default: 3.0)",
+    )
+    parser.add_argument(
+        "--step-seconds",
+        type=float,
+        default=float(os.environ.get("VERIFY_STEP_SECONDS", "1.5")),
+        help="Sliding window step in seconds (default: 1.5)",
+    )
+
+    return parser.parse_args()
+
+
+async def main() -> None:
+    """Run the Wyoming voice match proxy."""
+    args = get_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    voiceprints_dir = Path(args.voiceprints_dir)
+    if not voiceprints_dir.exists():
+        _LOGGER.error(
+            "Voiceprints directory not found at %s. "
+            "Run the enrollment script first: "
+            "python -m scripts.enroll --speaker <n>",
+            voiceprints_dir,
+        )
+        sys.exit(1)
+
+    _LOGGER.info("Loading ECAPA-TDNN speaker verification model...")
+    verifier = SpeakerVerifier(
+        voiceprints_dir=str(voiceprints_dir),
+        model_dir=args.model_dir,
+        device=args.device,
+        threshold=args.threshold,
+        max_verify_seconds=args.max_verify_seconds,
+        window_seconds=args.window_seconds,
+        step_seconds=args.step_seconds,
+    )
+
+    if not verifier.voiceprints:
+        _LOGGER.error(
+            "No voiceprints found in %s. "
+            "Run the enrollment script first: "
+            "python -m scripts.enroll --speaker <n>",
+            voiceprints_dir,
+        )
+        sys.exit(1)
+
+    _LOGGER.info(
+        "Speaker verifier ready - %d speaker(s) enrolled "
+        "(threshold=%.2f, device=%s, verify_window=%.1fs, "
+        "sliding_window=%.1fs/%.1fs)",
+        len(verifier.voiceprints),
+        args.threshold,
+        args.device,
+        args.max_verify_seconds,
+        args.window_seconds,
+        args.step_seconds,
+    )
+
+    wyoming_info = Info(
+        asr=[
+            AsrProgram(
+                name="voice-match",
+                description=f"Speaker-verified ASR proxy v{__version__}",
+                attribution=Attribution(
+                    name="Wyoming Voice Match",
+                    url="https://github.com/jxlarrea/wyoming-voice-match",
+                ),
+                installed=True,
+                version=__version__,
+                models=[
+                    AsrModel(
+                        name="voice-match-proxy",
+                        description="ECAPA-TDNN speaker gate → upstream ASR",
+                        languages=["en"],
+                        attribution=Attribution(
+                            name="Wyoming Voice Match",
+                            url="https://github.com/jxlarrea/wyoming-voice-match",
+                        ),
+                        installed=True,
+                        version=__version__,
+                    )
+                ],
+            )
+        ]
+    )
+
+    _LOGGER.info(
+        "Starting server on %s → upstream %s",
+        args.uri,
+        args.upstream_uri,
+    )
+
+    server = AsyncServer.from_uri(args.uri)
+    await server.run(
+        partial(
+            SpeakerVerifyHandler,
+            wyoming_info,
+            verifier,
+            args.upstream_uri,
+        )
+    )
+
+
+def run() -> None:
+    """Sync wrapper for main."""
+    asyncio.run(main())
+
+
+if __name__ == "__main__":
+    run()
+```
+
+### wyoming_voice_match/handler.py
+
+See handler.py source in the main project. The complete file is included in the repository and matches the specification in the Handler section above.
+
+### wyoming_voice_match/verify.py
+
+See verify.py source in the main project. The complete file is included in the repository and matches the specification in the Verifier section above.
+
+### scripts/enroll.py
+
+See scripts/enroll.py source in the main project. The complete file is included in the repository and matches the specification in the Enrollment section above.
+
+### scripts/test_verify.py
+
+See scripts/test_verify.py source in the main project. The complete file is included in the repository and matches the specification in the Test Script section above.
+
+### scripts/demo.py
+
+See scripts/demo.py source in the main project. The complete file is included in the repository and matches the specification in the Demo Script section above.
+
+### Dockerfile
+
+```dockerfile
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS builder
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        python3-pip \
+        python3-dev \
+        libsndfile1 && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir \
+        torch torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip uninstall -y triton 2>/dev/null; \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cublas && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_nvrtc && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cudnn && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cufft && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/curand && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusolver && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusparse && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nccl && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nvjitlink && \
+    cd /usr/local/lib/python3.10/dist-packages/torch/lib && \
+    rm -f libnccl* libcublas* libcublasLt* libcusolver* \
+          libcufft* libcurand* libnvrtc* libnvJitLink* libnvfuser* && \
+    find /usr/local/lib/python3.10/dist-packages/torch -name "*.a" -delete && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/torch/include && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/torch/share && \
+    pip uninstall -y sympy networkx 2>/dev/null; \
+    rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/recipes && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/tests && \
+    find /usr/local/lib/python3.10/dist-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; \
+    echo "Cleanup complete"
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+LABEL maintainer="Wyoming Voice Match"
+LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification"
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3 \
+        libsndfile1 \
+        ffmpeg \
+        libgomp1 && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+COPY wyoming_voice_match/ wyoming_voice_match/
+COPY scripts/ scripts/
+
+RUN mkdir -p /data/enrollment /data/voiceprints /data/models
+
+EXPOSE 10350
+
+ENTRYPOINT ["python", "-m", "wyoming_voice_match"]
+```
+
+### Dockerfile.cpu
+
+```dockerfile
+FROM python:3.11-slim
+
+LABEL maintainer="Wyoming Voice Match"
+LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification (CPU-only)"
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libsndfile1 \
+        ffmpeg && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.cpu.txt .
+RUN pip install --no-cache-dir \
+        torch==2.4.1+cpu torchaudio==2.4.1+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir soundfile && \
+    pip install --no-cache-dir -r requirements.cpu.txt
+
+COPY wyoming_voice_match/ wyoming_voice_match/
+COPY scripts/ scripts/
+
+RUN mkdir -p /data/enrollment /data/voiceprints /data/models
+
+EXPOSE 10350
+
+ENTRYPOINT ["python", "-m", "wyoming_voice_match"]
+```
+
+### docker-compose.yml
 
 ```yaml
 services:
@@ -86,7 +825,7 @@ services:
               capabilities: [gpu]
 ```
 
-**CPU-only:**
+### docker-compose.cpu.yml
 
 ```yaml
 services:
@@ -106,214 +845,50 @@ services:
       - LOG_LEVEL=DEBUG
 ```
 
-Update `UPSTREAM_URI` to point to your ASR service.
-
-### 3. Enroll Your Voice
-
-Record at least 30 WAV files per speaker, 5 seconds each, speaking naturally at varied volumes and distances. Place them in `data/enrollment/<speaker>/`:
-
-```bash
-mkdir -p data/enrollment/john
-```
-
-**Linux:**
-
-```bash
-for i in $(seq 1 30); do
-  echo "Sample $i - speak naturally for 5 seconds..."
-  arecord -r 16000 -c 1 -f S16_LE -d 5 "data/enrollment/john/john_$(date +%Y%m%d_%H%M%S).wav"
-  sleep 1
-done
-```
-
-**macOS:**
-
-```bash
-for i in $(seq 1 30); do
-  echo "Sample $i - speak naturally for 5 seconds..."
-  sox -d -r 16000 -c 1 -b 16 "data/enrollment/john/john_$(date +%Y%m%d_%H%M%S).wav" trim 0 5
-  sleep 1
-done
-```
-
-> Requires [SoX](https://formulae.brew.sh/formula/sox): `brew install sox`
-
-**Windows (PowerShell):**
-
-Download the [recording script](https://raw.githubusercontent.com/jxlarrea/wyoming-voice-match/main/tools/record_samples.ps1) and run it - it will list your microphones, let you pick one, and guide you through recording:
-
-```powershell
-.\record_samples.ps1 -Speaker john
-```
-
-> Requires [ffmpeg](https://ffmpeg.org/download.html): `winget install ffmpeg`
-
-Alternatively, use any voice recorder app on your phone or computer and save the files as WAV. The enrollment script handles resampling automatically, so any sample rate or channel count will work.
-
-**Example phrases to record** (one per sample, speak naturally):
-
-1. "Hey, turn on the living room lights and set them to fifty percent"
-2. "What's the weather going to be like tomorrow morning"
-3. "Set a timer for ten minutes and remind me to check the oven"
-4. "Lock the front door and turn off all the lights downstairs"
-5. "What's the temperature inside the house right now"
-
-> **Tip:** The best results come from enrolling with **30 samples** at varied volumes and distances. The more variety in your samples, the more robust your voiceprint will be.
-
-Generate the voiceprint:
-
-```bash
-docker compose run --rm wyoming-voice-match python -m scripts.enroll --speaker john
-```
-
-Repeat for additional speakers:
-
-```bash
-docker compose run --rm wyoming-voice-match python -m scripts.enroll --speaker jane
-```
-
-Manage enrolled speakers:
-
-```bash
-# List all enrolled speakers
-docker compose run --rm wyoming-voice-match python -m scripts.enroll --list
-
-# Delete a speaker
-docker compose run --rm wyoming-voice-match python -m scripts.enroll --delete john
-```
-
-### 4. Start the Service
-
-```bash
-docker compose up -d
-```
-
-### 5. Configure Home Assistant
-
-In Home Assistant, update your voice pipeline to use this service as the STT provider:
-
-1. Go to **Settings → Devices & Services → Wyoming Protocol**
-2. Add a new Wyoming integration pointing to your server's IP on port **10350**
-3. In **Settings → Voice Assistants**, edit your pipeline and set the Speech-to-Text to the new Wyoming Voice Match service
-
-## Configuration
-
-### Environment Variables
-
-All configuration is done in the `environment` section of `docker-compose.yml`:
-
-| Variable | Default | Description |
-|---|---|---|
-| `UPSTREAM_URI` | `tcp://localhost:10300` | Wyoming URI of your real ASR service |
-| `VERIFY_THRESHOLD` | `0.20` | Cosine similarity threshold for speaker verification (0.0-1.0) |
-| `LISTEN_URI` | `tcp://0.0.0.0:10350` | URI this service listens on |
-| `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`). Auto-detects: falls back to CPU if CUDA is unavailable |
-| `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |
-| `LOG_LEVEL` | `DEBUG` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-| `MAX_VERIFY_SECONDS` | `5.0` | Seconds of audio to buffer before starting speaker verification |
-| `VERIFY_WINDOW_SECONDS` | `3.0` | Sliding window size (in seconds) for the fallback verification pass |
-| `VERIFY_STEP_SECONDS` | `1.5` | Step size (in seconds) between sliding windows |
-
-### Tuning the Threshold
-
-The `VERIFY_THRESHOLD` environment variable controls how strict speaker matching is. Adjust it in `docker-compose.yml` and restart:
-
-| Value | Behavior |
-|-------|----------|
-| `0.20` | **Default** - lenient, good for noisy environments with TV or background audio |
-| `0.30` | Moderate - good for varied voice volumes and distances |
-| `0.35` | Moderate - slightly stricter, still tolerant of quiet speech |
-| `0.45` | Balanced - good security with consistent mic distance |
-| `0.55` | Strict - fewer false accepts, but may reject you more often |
-| `0.65` | Very strict - high security, requires close mic and clear speech |
-
-Start with debug logging enabled and observe the similarity scores:
-
-```bash
-docker compose logs -f wyoming-voice-match
-```
-
-You'll see output like:
+### requirements.txt
 
 ```
-INFO [971f8eb8] Speaker verified: jx (similarity=0.3787, threshold=0.20), forwarding to ASR immediately
-WARNING [3a2c1b9f] Speaker rejected in 5032ms (best=0.1847, threshold=0.20, scores={'jx': '0.1847'})
+wyoming==1.8.0
+speechbrain>=1.0.0
+scipy>=1.11.0
+numpy>=1.24.0
+requests>=2.28.0
+huggingface_hub<0.27.0
 ```
 
-- **Your voice** will typically score **0.25-0.75** depending on conditions
-- **TV/other speakers** will typically score **0.05-0.20**
-- Set the threshold in the gap between these ranges
-- If you're getting rejected when speaking quietly, **lower the threshold** or **re-enroll with more samples** recorded at different volumes and distances
+### requirements.cpu.txt
 
-> **Being rejected too often?** The most effective fix is to add more enrollment samples. Record additional samples in the conditions where you're being rejected (e.g., speaking softly, further from the mic, different times of day) and re-run enrollment. More samples produce a more robust voiceprint that handles natural voice variation better.
-
-### Noisy Environment Tuning
-
-The default settings are already tuned for noisy environments (TV, radio, etc.). The speaker extraction automatically removes background audio by comparing each speech region against your voiceprint - only regions matching your voice are forwarded to ASR.
-
-If you need to adjust further:
-
-```yaml
-    environment:
-      - MAX_VERIFY_SECONDS=5.0   # Start verification after 5s
-      - VERIFY_THRESHOLD=0.20    # Low threshold to account for mixed audio
+```
+wyoming==1.8.0
+speechbrain>=1.0.0
+scipy>=1.11.0
+numpy>=1.24.0
+requests>=2.28.0
+huggingface_hub<0.27.0
 ```
 
-> **Note:** The satellite may continue showing a "listening" animation after the command has been processed. This is cosmetic - the proxy waits for the full stream to capture your complete command, but Home Assistant will have the transcript as soon as extraction and ASR finish.
+### LICENSE
 
-### Re-enrollment
-
-To update a speaker's voiceprint, add more WAV files to `data/enrollment/<speaker>/` and re-run enrollment. The script processes all WAV files in the folder to generate an updated voiceprint.
-
-Record additional samples using the same method as initial enrollment, then re-run:
-
-```bash
-docker compose run --rm wyoming-voice-match python -m scripts.enroll --speaker john
-docker compose restart wyoming-voice-match
 ```
+MIT License
 
-### Demo: See Extraction in Action
+Copyright (c) 2026
 
-Want to hear exactly what gets sent to your ASR service? The demo script runs the full pipeline on a WAV file and writes the extracted audio so you can compare before and after.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-Place a WAV file in your `data/` folder (any sample rate or channel count - it will be converted automatically), then run:
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-```bash
-docker compose run --rm wyoming-voice-match \
-  python -m scripts.demo \
-  --speaker john \
-  --input /data/test_audio.wav \
-  --output /data/cleaned.wav
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
-
-The script will:
-- Verify the speaker against all enrolled voiceprints (showing similarity scores)
-- Run speaker extraction, showing each detected speech region and whether it was kept or discarded
-- Write the result as a WAV file containing only your voice
-
-This is useful for understanding how the extraction works, tuning your threshold, or just confirming that TV audio is being properly removed.
-
-## Performance
-
-- **Speaker verification latency:** ~5-25ms on GPU, ~200-500ms on CPU
-- **Speaker extraction:** ~15-35ms on GPU for a typical 10-15s buffer
-- **End-to-end pipeline:** Waits for the full audio stream, then verifies and extracts your voice. Total time depends on how long the satellite streams (typically 8-15 seconds with background noise)
-- **Memory usage:** ~500MB (model + PyTorch runtime)
-- **Accuracy:** ECAPA-TDNN achieves 0.69% Equal Error Rate on VoxCeleb1, state of the art for open-source speaker verification
-
-## Limitations
-
-- **Short commands** (under 1-2 seconds) produce less audio for verification, reducing accuracy
-- **Voice changes** from illness, whispering, or shouting may lower similarity scores - enroll with varied samples to improve robustness
-- **Satellite listening animation** may continue after the command has been processed, since the satellite's VAD doesn't know the proxy already responded
-- **Multiple users** are supported - enroll each person separately and the service accepts audio from any enrolled speaker
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- [SpeechBrain](https://speechbrain.github.io/) for the ECAPA-TDNN speaker verification model
-- [Wyoming Protocol](https://github.com/OHF-Voice/wyoming) by the Open Home Foundation
-- [Home Assistant](https://www.home-assistant.io/) voice pipeline ecosystem
