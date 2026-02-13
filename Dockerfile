@@ -41,7 +41,6 @@ RUN pip install --no-cache-dir \
     rm -rf /usr/local/lib/python3.10/dist-packages/torch/onnx && \
     rm -rf /usr/local/lib/python3.10/dist-packages/torch/include && \
     rm -rf /usr/local/lib/python3.10/dist-packages/torch/share && \
-    rm -rf /usr/local/lib/python3.10/dist-packages/torch/bin && \
     # Remove sympy and networkx (torch deps not needed at runtime for inference)
     pip uninstall -y sympy networkx 2>/dev/null; \
     rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/recipes && \
