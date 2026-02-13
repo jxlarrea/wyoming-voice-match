@@ -76,6 +76,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             self._verify_result = None
             self._verify_started = False
             self._stream_start_time = time.monotonic()
+            _LOGGER.debug("── New audio session started ──")
             return True
 
         # Audio data — accumulate and trigger early verification
@@ -138,6 +139,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         if len(audio_bytes) == 0:
             _LOGGER.debug("Empty audio buffer, returning empty transcript")
             await self.write_event(Transcript(text="").event())
+            _LOGGER.debug("── Session complete (empty) ──")
             return
 
         stream_elapsed = 0.0
@@ -212,9 +214,21 @@ class SpeakerVerifyHandler(AsyncEventHandler):
 
             transcript = await self._forward_to_upstream(asr_audio)
             await self.write_event(Transcript(text=transcript).event())
+            total_elapsed = 0.0
+            if self._stream_start_time is not None:
+                total_elapsed = (time.monotonic() - self._stream_start_time) * 1000
+            _LOGGER.info(
+                "Pipeline complete in %.0fms: \"%s\"",
+                total_elapsed,
+                transcript,
+            )
         else:
+            total_elapsed = 0.0
+            if self._stream_start_time is not None:
+                total_elapsed = (time.monotonic() - self._stream_start_time) * 1000
             _LOGGER.warning(
-                "Speaker rejected (best=%.4f, threshold=%.2f, scores=%s)",
+                "Speaker rejected in %.0fms (best=%.4f, threshold=%.2f, scores=%s)",
+                total_elapsed,
                 result.similarity,
                 result.threshold,
                 {n: f"{s:.4f}" for n, s in result.all_scores.items()},
