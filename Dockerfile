@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir \
     pip install --no-cache-dir -r requirements.txt && \
     # Uninstall triton (~600MB, not needed for inference)
     pip uninstall -y triton 2>/dev/null; \
-    # Remove nvidia pip packages that duplicate libs in the CUDA 12.4 runtime base
+    # Remove nvidia pip packages that duplicate libs in the CUDA 12.4+cuDNN runtime base
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cublas && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_nvrtc && \
@@ -26,26 +26,20 @@ RUN pip install --no-cache-dir \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusparse && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nccl && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nvjitlink && \
-    # Strip PyTorch
-    find /usr/local/lib/python3.10/dist-packages/torch -name "*.a" -delete && \
-    find /usr/local/lib/python3.10/dist-packages/torch -name "test" -type d -exec rm -rf {} + 2>/dev/null; \
-    find /usr/local/lib/python3.10/dist-packages/torch -name "tests" -type d -exec rm -rf {} + 2>/dev/null; \
+    # Remove duplicate CUDA libs from torch/lib (keep cusparseLt)
     cd /usr/local/lib/python3.10/dist-packages/torch/lib && \
     rm -f libnccl* libcublas* libcublasLt* libcusolver* \
           libcufft* libcurand* libnvrtc* libnvJitLink* libnvfuser* && \
-    rm -rf /usr/local/lib/python3.10/dist-packages/torch/distributed && \
-    rm -rf /usr/local/lib/python3.10/dist-packages/torch/_inductor && \
-    rm -rf /usr/local/lib/python3.10/dist-packages/torch/_dynamo && \
-    rm -rf /usr/local/lib/python3.10/dist-packages/torch/_functorch && \
-    rm -rf /usr/local/lib/python3.10/dist-packages/torch/ao && \
-    rm -rf /usr/local/lib/python3.10/dist-packages/torch/onnx && \
+    # Remove static libs and test dirs
+    find /usr/local/lib/python3.10/dist-packages/torch -name "*.a" -delete && \
     rm -rf /usr/local/lib/python3.10/dist-packages/torch/include && \
     rm -rf /usr/local/lib/python3.10/dist-packages/torch/share && \
-    # Remove sympy and networkx (torch deps not needed at runtime for inference)
+    # Remove unused pip deps
     pip uninstall -y sympy networkx 2>/dev/null; \
+    # Remove SpeechBrain extras
     rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/recipes && \
     rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/tests && \
-    find /usr/local/lib/python3.10/dist-packages -name "tests" -type d -exec rm -rf {} + 2>/dev/null; \
+    # Clean caches
     find /usr/local/lib/python3.10/dist-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; \
     echo "Cleanup complete"
 
