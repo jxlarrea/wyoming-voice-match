@@ -217,20 +217,17 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         _LOGGER.debug("[%s] Forwarding %.1fs to ASR", sid, asr_duration)
 
         # Forward to ASR and respond immediately
-        asr_start = time.monotonic()
         transcript = await self._forward_to_upstream(forward_audio)
-        asr_ms = (time.monotonic() - asr_start) * 1000
         tagged = self._tag_transcript(transcript, speaker_name)
         await self.write_event(Transcript(text=tagged).event())
         self._responded = True
 
         total_elapsed = self._elapsed_ms()
-        processing_ms = verify_ms + extract_ms
         _LOGGER.info(
             "[%s] Pipeline complete in %.0fms: \"%s\" "
-            "(verify=%.0fms, extract=%.0fms, asr=%.0fms, processing=%.0fms)",
+            "(verify=%.0fms, extract=%.0fms)",
             sid, total_elapsed, tagged,
-            verify_ms, extract_ms, asr_ms, processing_ms,
+            verify_ms, extract_ms,
         )
 
     async def _process_audio_sync(self) -> None:
@@ -310,16 +307,15 @@ class SpeakerVerifyHandler(AsyncEventHandler):
 
             asr_start = time.monotonic()
             transcript = await self._forward_to_upstream(audio_bytes)
-            asr_ms = (time.monotonic() - asr_start) * 1000
             tagged = self._tag_transcript(transcript, result.matched_speaker)
             await self.write_event(Transcript(text=tagged).event())
             self._responded = True
             total_elapsed = self._elapsed_ms()
             _LOGGER.info(
                 "[%s] Pipeline complete in %.0fms: \"%s\" "
-                "(verify=%.0fms, asr=%.0fms, processing=%.0fms)",
+                "(verify=%.0fms)",
                 sid, total_elapsed, tagged,
-                verify_ms, asr_ms, verify_ms,
+                verify_ms,
             )
         else:
             total_elapsed = self._elapsed_ms()
