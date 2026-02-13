@@ -42,7 +42,7 @@ RUN pip install --no-cache-dir \
     echo "Cleanup complete"
 
 # --- Runtime stage ---
-FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-base-ubuntu22.04
 
 LABEL maintainer="Wyoming Voice Match"
 LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification"
