@@ -272,33 +272,26 @@ docker compose run --rm wyoming-voice-match python -m scripts.enroll --speaker j
 docker compose restart wyoming-voice-match
 ```
 
-## Docker Compose Integration
+### Demo: See Extraction in Action
 
-If you're running other Wyoming services, you can add Voice Match to your existing `docker-compose.yml`:
+Want to hear exactly what gets sent to your ASR service? The demo script runs the full pipeline on a WAV file and writes the extracted audio so you can compare before and after.
 
-```yaml
-services:
-  wyoming-voice-match:
-    image: ghcr.io/jxlarrea/wyoming-voice-match:latest
-    container_name: wyoming-voice-match
-    restart: unless-stopped
-    ports:
-      - "10350:10350"
-    volumes:
-      - ./wyoming-voice-match/data:/data
-    environment:
-      - UPSTREAM_URI=tcp://wyoming-faster-whisper:10300
-      - VERIFY_THRESHOLD=0.20
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+Place a WAV file in your `data/` folder (any sample rate or channel count - it will be converted automatically), then run:
+
+```bash
+docker compose run --rm wyoming-voice-match \
+  python -m scripts.demo \
+  --speaker john \
+  --input /data/test_audio.wav \
+  --output /data/cleaned.wav
 ```
 
-For CPU-only usage, replace the image tag with `ghcr.io/jxlarrea/wyoming-voice-match:cpu` and remove the `deploy` section.
+The script will:
+- Verify the speaker against all enrolled voiceprints (showing similarity scores)
+- Run speaker extraction, showing each detected speech region and whether it was kept or discarded
+- Write the result as a WAV file containing only your voice
+
+This is useful for understanding how the extraction works, tuning your threshold, or just confirming that TV audio is being properly removed.
 
 ## Performance
 

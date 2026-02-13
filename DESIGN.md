@@ -13,6 +13,7 @@ wyoming-voice-match/
 │   └── verify.py                 # ECAPA-TDNN speaker verification + extraction
 ├── scripts/
 │   ├── __init__.py               # Empty, makes scripts a package
+│   ├── demo.py                   # Pipeline demo CLI (verify + extract a WAV file)
 │   ├── enroll.py                 # Voice enrollment CLI
 │   └── test_verify.py            # Threshold tuning CLI
 ├── tools/
@@ -355,6 +356,22 @@ python -m scripts.test_verify /path/to/test.wav --threshold 0.20
 
 Loads a WAV file, extracts an embedding, and compares against all enrolled voiceprints. Displays a table of similarities with MATCH/REJECT indicators.
 
+## Demo Script (scripts/demo.py)
+
+CLI tool that runs the full verification and extraction pipeline on a WAV file, writing the extracted audio as a new WAV:
+```bash
+python -m scripts.demo --speaker john --input /data/test.wav --output /data/cleaned.wav
+```
+
+**Process:**
+1. Load input WAV (any sample rate or channel count - automatically resampled to 16kHz mono)
+2. Run full three-pass speaker verification, displaying similarity scores for all enrolled speakers
+3. Run two-stage speaker extraction (energy detection + voiceprint filtering per region)
+4. Write extracted audio (only the enrolled speaker's voice) as a WAV file
+5. Print summary: input/output duration, amount removed, per-region scores
+
+Debug logging is always enabled so the output shows the complete region-by-region breakdown including individual similarity scores, energy thresholds, and keep/drop decisions. The output WAV represents exactly what would be forwarded to the upstream ASR service during normal operation.
+
 ## Docker Images
 
 ### GPU Image (Dockerfile)
@@ -672,6 +689,10 @@ See scripts/enroll.py source in the main project. The complete file is included 
 ### scripts/test_verify.py
 
 See scripts/test_verify.py source in the main project. The complete file is included in the repository and matches the specification in the Test Script section above.
+
+### scripts/demo.py
+
+See scripts/demo.py source in the main project. The complete file is included in the repository and matches the specification in the Demo Script section above.
 
 ### Dockerfile
 
