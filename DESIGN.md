@@ -121,15 +121,29 @@ After verification passes and AudioStop arrives, `extract_speaker_audio()` isola
 - Extract ECAPA-TDNN embedding from the region
 - Compare against enrolled speaker's voiceprint via cosine similarity
 - Keep regions with similarity ≥ `threshold * 0.5` (half the verification threshold, more lenient)
-- Concatenate kept regions as the final output
+- If a region is 3s+ and **fails** the check, run rescue scanning (see Stage 3) - the speaker's voice may be buried inside a larger blob of background audio
 
-**Why this works:** The user's voice near the mic produces embeddings matching their voiceprint (similarity 0.20-0.55). TV speakers produce completely different embeddings (similarity -0.04 to 0.07). The voiceprint comparison cleanly separates these regardless of volume overlap.
+**Stage 3 - Sub-region scanning (for regions 3s+):**
+
+Applies in two cases:
+
+*Edge trimming* - when a long region passes Stage 2, a sliding window (1.5s window, 0.5s step) scans the entire region. The longest contiguous run of windows matching the speaker determines the trim boundaries. The trim threshold is the midpoint between the extraction threshold and the region's overall similarity score, which adapts to the actual signal quality. This removes TV/background audio that got bundled at the edges because energy levels never dropped long enough to create a gap.
+
+*Rescue scanning* - when a long region fails Stage 2 (the speaker's voice is diluted by surrounding background audio), the same sliding window scans for sub-segments that match. Uses the full verification threshold (`self.threshold`) since a genuine voice window should score near verification levels. This rescues short commands (e.g., "what time is it") spoken over continuous background noise.
+
+The final output is the concatenation of all kept (and potentially trimmed/rescued) regions.
+
+**Why this works:** The user's voice near the mic produces embeddings matching their voiceprint (similarity 0.20-0.55). TV speakers produce completely different embeddings (similarity -0.04 to 0.07). The voiceprint comparison cleanly separates these regardless of volume overlap. The sub-region scanning handles cases where energy analysis merges the speaker's voice with background audio into a single region.
 
 **Key parameters:**
 - Frame size for energy analysis: 50ms
 - Gap bridging: 300ms (joins speech regions separated by brief pauses)
 - Minimum region length for embedding: 1.0s (shorter segments produce unreliable embeddings)
 - Extraction similarity threshold: `VERIFY_THRESHOLD * 0.5` (default 0.10)
+- Sub-region scan minimum region length: 3.0s
+- Sub-region scan window: 1.5s, step: 0.5s
+- Trim threshold: midpoint of extraction threshold and region similarity
+- Rescue threshold: `VERIFY_THRESHOLD` (full verification threshold)
 - Noise floor: 10th percentile of frame RMS × 5, minimum 500
 
 ### AudioStop Synchronization
@@ -306,7 +320,10 @@ class VerificationResult:
 Three-pass verification as described in Pipeline Architecture. Returns best result across all passes.
 
 **`extract_speaker_audio(audio_bytes, speaker_name, sample_rate, similarity_threshold?) → bytes`**
-Two-stage speaker extraction as described in Pipeline Architecture. Returns concatenated PCM of kept regions.
+Three-stage speaker extraction as described in Pipeline Architecture. Returns concatenated PCM of kept (and potentially trimmed/rescued) regions.
+
+**`_trim_region(audio_bytes, start_frame, end_frame, ..., similarity_threshold, window_seconds, step_seconds, frame_ms) → Optional[bytes]`**
+Sliding window scan used for both edge trimming and rescue scanning. Scans the entire region, finds the longest contiguous run of windows matching the threshold, and returns only that portion. Returns None if no matches found.
 
 **`_extract_speech_segment(audio_bytes, sample_rate) → Optional[Tuple[bytes, float, float]]`**
 Energy-based speech detection for verification pass 1:
@@ -366,7 +383,7 @@ python -m scripts.demo --speaker john --input /data/test.wav --output /data/clea
 **Process:**
 1. Load input WAV (any sample rate or channel count - automatically resampled to 16kHz mono)
 2. Run full three-pass speaker verification, displaying similarity scores for all enrolled speakers
-3. Run two-stage speaker extraction (energy detection + voiceprint filtering per region)
+3. Run three-stage speaker extraction (energy detection + voiceprint filtering + sub-region scanning)
 4. Write extracted audio (only the enrolled speaker's voice) as a WAV file
 5. Print summary: input/output duration, amount removed, per-region scores
 
