@@ -226,7 +226,10 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         await self.write_event(Transcript(text=tagged).event())
         self._responded = True
 
-        self._log_pipeline_summary(tagged, verify_ms, extract_ms, asr_ms)
+        self._log_pipeline_summary(
+            tagged, verify_ms, extract_ms, asr_ms,
+            buffer_duration, asr_duration,
+        )
 
     async def _process_audio_sync(self) -> None:
         """Fallback: verify and forward when AudioStop arrives (short audio)."""
@@ -313,10 +316,10 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                     )
                     extract_ms = (time.monotonic() - extract_start) * 1000
 
-            asr_duration = len(asr_audio) / bytes_per_second
+            asr_forwarded = len(asr_audio) / bytes_per_second
             _LOGGER.debug(
                 "[%s] Forwarding %.1fs to ASR",
-                sid, asr_duration,
+                sid, asr_forwarded,
             )
 
             asr_start = time.monotonic()
@@ -325,22 +328,28 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             tagged = self._tag_transcript(transcript, result.matched_speaker)
             await self.write_event(Transcript(text=tagged).event())
             self._responded = True
-            self._log_pipeline_summary(tagged, verify_ms, extract_ms, asr_ms)
+            self._log_pipeline_summary(
+                tagged, verify_ms, extract_ms, asr_ms,
+                audio_duration, asr_forwarded,
+            )
         else:
             if not self.require_speaker_match:
                 # Speaker not matched but matching not required —
                 # forward full audio without extraction
-                asr_duration = len(audio_bytes) / bytes_per_second
+                asr_forwarded = len(audio_bytes) / bytes_per_second
                 _LOGGER.debug(
                     "[%s] Speaker not matched (best=%.4f), forwarding %.1fs unmodified",
-                    sid, result.similarity, asr_duration,
+                    sid, result.similarity, asr_forwarded,
                 )
                 asr_start = time.monotonic()
                 transcript = await self._forward_to_upstream(audio_bytes)
                 asr_ms = (time.monotonic() - asr_start) * 1000
                 await self.write_event(Transcript(text=transcript).event())
                 self._responded = True
-                self._log_pipeline_summary(transcript, verify_ms, 0.0, asr_ms)
+                self._log_pipeline_summary(
+                    transcript, verify_ms, 0.0, asr_ms,
+                    audio_duration, asr_forwarded,
+                )
             else:
                 total_elapsed = self._elapsed_ms()
                 _LOGGER.info(
@@ -371,21 +380,35 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         verify_ms: float,
         extract_ms: float,
         asr_ms: float,
+        input_duration: float = 0.0,
+        output_duration: float = 0.0,
     ) -> None:
         """Log a formatted pipeline summary table."""
         sid = self._session_id
         total_ms = self._elapsed_ms()
+
+        if input_duration > 0 and output_duration < input_duration:
+            discarded = input_duration - output_duration
+            discarded_pct = (discarded / input_duration) * 100
+            extract_line = (
+                f"  Extract        {extract_ms:7.0f}ms  "
+                f"({input_duration:.1f}s → {output_duration:.1f}s, "
+                f"{discarded_pct:.0f}% discarded)"
+            )
+        else:
+            extract_line = f"  Extract        {extract_ms:7.0f}ms"
+
         _LOGGER.info(
             "[%s] ── Pipeline Summary ──\n"
             "  Step           Duration\n"
             "  ─────────────  ────────\n"
             "  Verify         %7.0fms\n"
-            "  Extract        %7.0fms\n"
+            "%s\n"
             "  ASR            %7.0fms\n"
             "  Total          %7.0fms\n"
             "\n"
             "  Transcript: \"%s\"",
-            sid, verify_ms, extract_ms, asr_ms, total_ms, transcript,
+            sid, verify_ms, extract_line, asr_ms, total_ms, transcript,
         )
 
     def _elapsed_ms(self) -> float:
