@@ -1,8 +1,8 @@
 """Demo script - run the full verification, extraction, and voice isolation pipeline on a WAV file.
 
 Simulates what happens when audio is processed by the proxy: verifies the
-speaker, extracts their voice segments, runs voice isolation at multiple
-levels, and writes the results as WAV files you can listen to and compare.
+speaker, extracts their voice segments, runs voice isolation, and writes
+the results as WAV files you can listen to and compare.
 
 Thresholds are read from VERIFY_THRESHOLD and EXTRACTION_THRESHOLD environment
 variables (set in docker-compose.yml), matching the main service configuration.
@@ -10,12 +10,9 @@ variables (set in docker-compose.yml), matching the main service configuration.
 Usage:
     python -m scripts.demo --speaker john --input test.wav --output cleaned.wav
 
-Produces output files:
-    cleaned.wav               - extracted speaker audio (ISOLATE_VOICE=0)
-    cleaned_isolated_25.wav   - 25% voice isolation
-    cleaned_isolated_50.wav   - 50% voice isolation
-    cleaned_isolated_75.wav   - 75% voice isolation
-    cleaned_isolated_100.wav  - 100% voice isolation
+Produces two output files:
+    cleaned.wav           - extracted speaker audio (what ASR receives normally)
+    cleaned_isolated.wav  - same audio after SepFormer voice isolation
 """
 
 import argparse
@@ -212,7 +209,7 @@ def main() -> None:
     print(f"\n  Output written to: {output_path}")
     print(f"  Total pipeline:    {total_ms:.0f}ms")
 
-    # Step 3: Voice isolation at multiple levels
+    # Step 3: Voice isolation
     print(f"\n  --- Voice Isolation ---")
     from wyoming_voice_match.enhance import SpeechEnhancer
 
@@ -220,46 +217,23 @@ def main() -> None:
     enhancer = SpeechEnhancer(
         model_dir=args.model_dir,
         device=args.device,
-        isolate_voice=1.0,
     )
     load_ms = (time.monotonic() - enhance_start) * 1000
     print(f"  Model loaded:      {load_ms:.0f}ms")
 
-    # Run SepFormer once at 100% to get the fully enhanced signal
     infer_start = time.monotonic()
-    full_enhanced = enhancer.enhance(extracted_bytes, sample_rate)
+    isolated_bytes = enhancer.enhance(extracted_bytes, sample_rate)
     infer_ms = (time.monotonic() - infer_start) * 1000
-    print(f"  Inference time:    {infer_ms:.0f}ms")
-
-    # Prepare original and enhanced as float tensors for blending
-    num_samples = len(extracted_bytes) // 2
-    original_samples = struct.unpack(f"<{num_samples}h", extracted_bytes)
-    enhanced_samples = struct.unpack(f"<{num_samples}h", full_enhanced)
-    original_f = torch.FloatTensor(original_samples) / 32768.0
-    enhanced_f = torch.FloatTensor(enhanced_samples) / 32768.0
+    print(f"  Isolation time:    {infer_ms:.0f}ms")
 
     stem = output_path.stem
-    levels = [25, 50, 75, 100]
+    isolated_path = output_path.with_name(f"{stem}_isolated{output_path.suffix}")
+    write_wav(str(isolated_path), isolated_bytes, sample_rate)
 
-    for pct in levels:
-        amount = pct / 100.0
-        if pct == 100:
-            blended_bytes = full_enhanced
-        else:
-            blended = amount * enhanced_f + (1.0 - amount) * original_f
-            blended = torch.clamp(blended, -1.0, 1.0)
-            pcm = (blended * 32767.0).to(torch.int16)
-            blended_bytes = struct.pack(f"<{len(pcm)}h", *pcm.tolist())
-
-        iso_path = output_path.with_name(f"{stem}_isolated_{pct}{output_path.suffix}")
-        write_wav(str(iso_path), blended_bytes, sample_rate)
-        print(f"  ISOLATE_VOICE={amount:.2f}:  {iso_path}")
-
-    print(f"\n  Compare files to find your preferred ISOLATE_VOICE level:")
-    print(f"    {output_path.name:<40s}  (ISOLATE_VOICE=0 — disabled)")
-    for pct in levels:
-        name = f"{stem}_isolated_{pct}{output_path.suffix}"
-        print(f"    {name:<40s}  (ISOLATE_VOICE={pct/100:.2f})")
+    print(f"\n  Compare the two files to hear the difference:")
+    print(f"    Extracted:  {output_path}")
+    print(f"    Isolated:   {isolated_path}")
+    print(f"\n  To test transcription accuracy, send each file to your ASR service.")
     print()
 
 

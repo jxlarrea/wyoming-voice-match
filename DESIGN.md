@@ -196,7 +196,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 | `--extraction-threshold` | `EXTRACTION_THRESHOLD` | `0.25` | Extraction similarity threshold |
 | `--require-speaker-match` | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded instead of rejected — enrolled speakers still get extraction |
 | `--tag-speaker` | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts |
-| `--isolate-voice` | `ISOLATE_VOICE` | `0` | Voice isolation: 0=disabled, 0.5=moderate, 1.0=full |
+| `--isolate-voice` | `ISOLATE_VOICE` | `false` | Run voice isolation on extracted audio before ASR |
 | `--debug` | `LOG_LEVEL=DEBUG` | `INFO` | Enable debug logging |
 | `--device` | `DEVICE` | `cuda` | `cuda` or `cpu` (auto-detects, falls back to cpu) |
 | `--voiceprints-dir` | `VOICEPRINTS_DIR` | `/data/voiceprints` | Directory with .npy voiceprints |
@@ -212,7 +212,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 3. Validate voiceprints directory exists (exit 1 if not)
 4. Create `SpeakerVerifier` - loads ECAPA-TDNN model and all .npy voiceprints
 5. Validate at least one voiceprint loaded (exit 1 if `require_speaker_match` is true, warn if false)
-6. If `isolate_voice` > 0, create `SpeechEnhancer` - loads SepFormer enhancement model
+6. If `isolate_voice` is true, create `SpeechEnhancer` - loads SepFormer enhancement model
 7. Query upstream ASR for supported languages via `query_upstream_languages()`
 8. Build `wyoming.info.Info` with ASR program/model metadata and upstream languages
 9. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
@@ -328,9 +328,9 @@ Sends audio to the upstream Wyoming ASR service:
 
 Prepends `[speaker_name]` to the transcript when `tag_speaker` is enabled. Returns the transcript unchanged if tagging is disabled, speaker name is None, or transcript is empty. Useful for LLM-based conversation agents that can use the speaker identity for personalization.
 
-### _maybe_enhance(audio_bytes: bytes, sid: str) → (bytes, float)
+### _maybe_isolate(audio_bytes: bytes, sid: str) → (bytes, float)
 
-If `self.enhancer` is set (ISOLATE_VOICE > 0), runs speech enhancement on the audio under `_MODEL_LOCK` and returns `(enhanced_bytes, enhance_ms)`. If enhancer is None, returns the input unchanged with `enhance_ms=0.0`. Called after extraction and before `_forward_to_upstream()` in both the early pipeline and sync paths.
+If `self.enhancer` is set (ISOLATE_VOICE > 0), runs voice isolation on the audio under `_MODEL_LOCK` and returns `(isolated_bytes, isolate_ms)`. If enhancer is None, returns the input unchanged with `isolate_ms=0.0`. Called after extraction and before `_forward_to_upstream()` in both the early pipeline and sync paths.
 
 ## Enhancer (enhance.py)
 
@@ -338,13 +338,12 @@ If `self.enhancer` is set (ISOLATE_VOICE > 0), runs speech enhancement on the au
 
 Optional voice isolation module that removes residual background noise from extracted speaker audio before forwarding to ASR. Uses a SepFormer model via SpeechBrain. Language-agnostic — operates on acoustic features, not linguistic content.
 
-Controlled by `ISOLATE_VOICE` (0.0–1.0): 0 disables it entirely (no model loaded), values between 0 and 1 blend the original and enhanced signals, and 1.0 applies full SepFormer enhancement.
+Controlled by `ISOLATE_VOICE` (true/false). When false, no model is loaded and no VRAM is used.
 
 **Constructor parameters:**
 - `model_dir: str` - directory to cache downloaded model weights
 - `device: str` - "cuda" or "cpu" (auto-falls-back to cpu)
 - `model_source: str` - HuggingFace model identifier (default: `speechbrain/sepformer-wham16k-enhancement`)
-- `isolate_voice: float` - blend level between original and enhanced (0.0–1.0)
 
 **On construction:**
 1. Import `SepformerSeparation` from SpeechBrain (deferred to avoid loading when disabled)
@@ -355,8 +354,8 @@ Controlled by `ISOLATE_VOICE` (0.0–1.0): 0 disables it entirely (no model load
 
 1. Convert raw 16-bit PCM bytes to float32 tensor in [-1.0, 1.0] range
 2. Run SepFormer inference (`separate_batch`) — outputs enhanced waveform
-3. Blend enhanced with original based on `isolate_voice` level
-4. Clamp and convert back to 16-bit PCM bytes
+3. Take first source channel, clamp to valid range
+4. Convert back to 16-bit PCM bytes
 
 **Pipeline position:** After speaker extraction, before ASR forwarding. Only runs when a speaker was matched (not on bypass/unmatched audio).
 
@@ -1030,7 +1029,7 @@ services:
       - HF_HOME=/data/hf_cache
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
-      # - ISOLATE_VOICE=0                  # Voice isolation: 0=off, 0.5=moderate, 1.0=full
+      # - ISOLATE_VOICE=false              # Run voice isolation on extracted audio before ASR
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size
@@ -1064,7 +1063,7 @@ services:
       - HF_HOME=/data/hf_cache
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
-      # - ISOLATE_VOICE=0                  # Voice isolation: 0=off, 0.5=moderate, 1.0=full
+      # - ISOLATE_VOICE=false              # Run voice isolation on extracted audio before ASR
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size

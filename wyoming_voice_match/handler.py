@@ -221,8 +221,8 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         asr_duration = len(forward_audio) / bytes_per_second
         _LOGGER.debug("[%s] Forwarding %.1fs to ASR", sid, asr_duration)
 
-        # Enhance audio if enabled
-        forward_audio, enhance_ms = await self._maybe_enhance(forward_audio, sid)
+        # Isolate voice if enabled
+        forward_audio, isolate_ms = await self._maybe_isolate(forward_audio, sid)
 
         # Forward to ASR and respond immediately
         transcript = await self._forward_to_upstream(forward_audio)
@@ -231,11 +231,12 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self._responded = True
 
         total_elapsed = self._elapsed_ms()
+        timing = f"verify={verify_ms:.0f}ms, extract={extract_ms:.0f}ms"
+        if isolate_ms > 0:
+            timing += f", isolate={isolate_ms:.0f}ms"
         _LOGGER.info(
-            "[%s] Pipeline complete in %.0fms: \"%s\" "
-            "(verify=%.0fms, extract=%.0fms, enhance=%.0fms)",
-            sid, total_elapsed, tagged,
-            verify_ms, extract_ms, enhance_ms,
+            "[%s] Pipeline complete in %.0fms: \"%s\" (%s)",
+            sid, total_elapsed, tagged, timing,
         )
 
     async def _process_audio_sync(self) -> None:
@@ -329,8 +330,8 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 sid, asr_duration,
             )
 
-            # Enhance audio if enabled
-            asr_audio, enhance_ms = await self._maybe_enhance(asr_audio, sid)
+            # Isolate voice if enabled
+            asr_audio, isolate_ms = await self._maybe_isolate(asr_audio, sid)
 
             asr_start = time.monotonic()
             transcript = await self._forward_to_upstream(asr_audio)
@@ -338,11 +339,12 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             await self.write_event(Transcript(text=tagged).event())
             self._responded = True
             total_elapsed = self._elapsed_ms()
+            timing = f"verify={verify_ms:.0f}ms, extract={extract_ms:.0f}ms"
+            if isolate_ms > 0:
+                timing += f", isolate={isolate_ms:.0f}ms"
             _LOGGER.info(
-                "[%s] Pipeline complete in %.0fms: \"%s\" "
-                "(verify=%.0fms, extract=%.0fms, enhance=%.0fms)",
-                sid, total_elapsed, tagged,
-                verify_ms, extract_ms, enhance_ms,
+                "[%s] Pipeline complete in %.0fms: \"%s\" (%s)",
+                sid, total_elapsed, tagged, timing,
             )
         else:
             if not self.require_speaker_match:
@@ -378,29 +380,29 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             return f"[{speaker_name}] {transcript}"
         return transcript
 
-    async def _maybe_enhance(self, audio_bytes: bytes, sid: str) -> tuple:
-        """Run speech enhancement if enabled. Returns (audio_bytes, enhance_ms)."""
+    async def _maybe_isolate(self, audio_bytes: bytes, sid: str) -> tuple:
+        """Run voice isolation if enabled. Returns (audio_bytes, isolate_ms)."""
         if not self.enhancer:
             return audio_bytes, 0.0
         async with _MODEL_LOCK:
             loop = asyncio.get_running_loop()
-            enhance_start = time.monotonic()
-            enhanced = await loop.run_in_executor(
+            isolate_start = time.monotonic()
+            isolated = await loop.run_in_executor(
                 None,
                 self.enhancer.enhance,
                 audio_bytes,
                 self._audio_rate,
                 self._audio_width,
             )
-            enhance_ms = (time.monotonic() - enhance_start) * 1000
+            isolate_ms = (time.monotonic() - isolate_start) * 1000
         bytes_per_second = (
             self._audio_rate * self._audio_width * self._audio_channels
         )
         _LOGGER.debug(
-            "[%s] Enhanced %.1fs audio in %.0fms",
-            sid, len(audio_bytes) / bytes_per_second, enhance_ms,
+            "[%s] Isolated %.1fs audio in %.0fms",
+            sid, len(audio_bytes) / bytes_per_second, isolate_ms,
         )
-        return enhanced, enhance_ms
+        return isolated, isolate_ms
 
     def _elapsed_ms(self) -> float:
         """Milliseconds since stream start."""
