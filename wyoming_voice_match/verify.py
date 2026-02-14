@@ -44,11 +44,13 @@ class SpeakerVerifier:
         model_dir: str = "/data/models",
         device: str = "cuda",
         threshold: float = 0.20,
+        extraction_threshold: Optional[float] = None,
         max_verify_seconds: float = 5.0,
         window_seconds: float = 3.0,
         step_seconds: float = 1.5,
     ) -> None:
         self.threshold = threshold
+        self.extraction_threshold = extraction_threshold
         self.max_verify_seconds = max_verify_seconds
         self.window_seconds = window_seconds
         self.step_seconds = step_seconds
@@ -382,7 +384,8 @@ class SpeakerVerifier:
             speaker_name: Name of the enrolled speaker to extract
             sample_rate: Audio sample rate in Hz
             similarity_threshold: Min similarity to keep a region.
-                                  Defaults to self.threshold * 0.5
+                                  Defaults to self.extraction_threshold if set,
+                                  otherwise self.threshold * 0.5
 
         Returns:
             Concatenated PCM audio containing only the speaker's segments
@@ -393,7 +396,10 @@ class SpeakerVerifier:
 
         voiceprint = self.voiceprints[speaker_name]
         if similarity_threshold is None:
-            similarity_threshold = self.threshold * 0.5
+            if self.extraction_threshold is not None:
+                similarity_threshold = self.extraction_threshold
+            else:
+                similarity_threshold = self.threshold * 0.5
 
         start_time = time.monotonic()
 

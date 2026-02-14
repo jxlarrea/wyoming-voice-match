@@ -82,6 +82,14 @@ def get_args() -> argparse.Namespace:
         help="Cosine similarity threshold for verification (default: 0.20)",
     )
     parser.add_argument(
+        "--extraction-threshold",
+        type=float,
+        default=float(os.environ.get("EXTRACTION_THRESHOLD", "0"))
+        or None,
+        help="Cosine similarity threshold for speaker extraction "
+             "(default: VERIFY_THRESHOLD * 0.5)",
+    )
+    parser.add_argument(
         "--device",
         default=os.environ.get("DEVICE", "cuda"),
         choices=["cuda", "cpu"],
@@ -154,6 +162,7 @@ async def main() -> None:
         model_dir=args.model_dir,
         device=args.device,
         threshold=args.threshold,
+        extraction_threshold=args.extraction_threshold,
         max_verify_seconds=args.max_verify_seconds,
         window_seconds=args.window_seconds,
         step_seconds=args.step_seconds,
@@ -168,12 +177,18 @@ async def main() -> None:
         )
         sys.exit(1)
 
+    extraction_display = (
+        f"{args.extraction_threshold:.2f}"
+        if args.extraction_threshold is not None
+        else f"{args.threshold * 0.5:.2f} (auto)"
+    )
     _LOGGER.info(
         "Speaker verifier ready — %d speaker(s) enrolled "
-        "(threshold=%.2f, device=%s, verify_window=%.1fs, "
+        "(threshold=%.2f, extraction=%s, device=%s, verify_window=%.1fs, "
         "sliding_window=%.1fs/%.1fs)",
         len(verifier.voiceprints),
         args.threshold,
+        extraction_display,
         args.device,
         args.max_verify_seconds,
         args.window_seconds,
