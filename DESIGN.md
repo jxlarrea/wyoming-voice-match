@@ -396,7 +396,7 @@ docker compose start wyoming-voice-match
 1. Starts a Wyoming ASR server on the configured listen port
 2. Registers as an ASR service so the satellite can connect
 3. For each sample: satellite wake word triggers audio streaming, handler buffers all audio until AudioStop, saves as WAV in `enrollment/<speaker>/satellite_NN.wav`
-4. Responds with a `Transcript` event containing progress (e.g., "Sample 1 of 5 saved. 4 remaining.") so the satellite speaks the update via TTS
+4. Responds with an empty `Transcript` event so the satellite plays its done sound without triggering a conversation response
 5. After all samples are collected, automatically runs `scripts.enroll` as a subprocess to generate the voiceprint
 6. Exits
 

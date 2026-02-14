@@ -127,9 +127,7 @@ class EnrollRecordHandler(AsyncEventHandler):
 
         if AudioStop.is_type(event.type):
             if self.state.samples_recorded >= self.state.target_samples:
-                await self.write_event(
-                    Transcript(text="All samples already recorded.").event()
-                )
+                await self.write_event(Transcript(text="").event())
                 return True
 
             bytes_per_second = (
@@ -139,11 +137,7 @@ class EnrollRecordHandler(AsyncEventHandler):
 
             if duration < 1.0:
                 _LOGGER.warning("Recording too short (%.1fs), skipping", duration)
-                await self.write_event(
-                    Transcript(
-                        text="Recording was too short. Please speak for at least 2 seconds."
-                    ).event()
-                )
+                await self.write_event(Transcript(text="").event())
                 return True
 
             self.state.samples_recorded += 1
@@ -160,17 +154,9 @@ class EnrollRecordHandler(AsyncEventHandler):
             )
 
             if remaining > 0:
-                message = (
-                    f"Sample {sample_num} of {self.state.target_samples} saved. "
-                    f"{remaining} remaining. Say the wake word and speak again."
-                )
-            else:
-                message = (
-                    f"Sample {sample_num} of {self.state.target_samples} saved. "
-                    f"All samples recorded. Running enrollment now."
-                )
+                _LOGGER.info("%d sample(s) remaining", remaining)
 
-            await self.write_event(Transcript(text=message).event())
+            await self.write_event(Transcript(text="").event())
 
             if remaining == 0:
                 self.state.done_event.set()

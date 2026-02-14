@@ -173,7 +173,7 @@ docker compose run --rm --service-ports --entrypoint python wyoming-voice-match 
   -m scripts.enroll_record --speaker john --samples 10
 ```
 
-The script listens on the same Wyoming port as the main service. Say your wake word on the satellite, speak naturally for a few seconds, and wait for the satellite to respond with a progress update (e.g., "Sample 1 of 5 saved. 4 remaining."). Repeat until all samples are collected. The script automatically runs enrollment and generates the voiceprint when done.
+The script listens on the same Wyoming port as the main service. Say your wake word on the satellite, speak naturally for a few seconds, and wait for the satellite's done sound. Each done sound means a sample was saved. Progress is logged to the terminal. Repeat until all samples are collected. The script automatically runs enrollment and generates the voiceprint when done.
 
 Restart the main service afterward:
 
