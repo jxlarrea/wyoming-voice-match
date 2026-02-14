@@ -200,13 +200,66 @@ def main() -> None:
     print(f"  Removed:           {removed_duration:.1f}s ({removed_pct:.0f}%)")
     print(f"  Extraction time:   {extract_ms:.0f}ms")
 
-    # Write output WAV
+    # Write cleaned output WAV (extraction only)
     output_path = Path(args.output)
     write_wav(str(output_path), extracted_bytes, sample_rate)
+    print(f"\n  Output written to: {output_path}")
+
+    # Step 3: Denoise the extracted audio
+    print(f"\n  --- Facebook Denoiser ---")
+    denoise_start = time.monotonic()
+    try:
+        from denoiser.pretrained import master64
+
+        # Convert extracted PCM bytes to float tensor
+        extracted_np = np.frombuffer(extracted_bytes, dtype=np.int16)
+        extracted_tensor = torch.FloatTensor(extracted_np).unsqueeze(0) / 32768.0
+
+        # Model expects [batch, channels, time]
+        model_input = extracted_tensor.unsqueeze(0)  # [1, 1, time]
+
+        model = master64()
+        model.eval()
+        denoise_load_ms = (time.monotonic() - denoise_start) * 1000
+
+        with torch.no_grad():
+            enhanced = model(model_input)
+
+        denoise_ms = (time.monotonic() - denoise_start) * 1000
+
+        # Debug stats
+        min_len = min(enhanced.shape[-1], model_input.shape[-1])
+        diff = enhanced[..., :min_len] - model_input[..., :min_len]
+        diff_rms = diff.pow(2).mean().sqrt().item()
+        changed_pct = (diff.abs() > 0.001).float().mean().item() * 100
+        print(f"  Diff RMS:          {diff_rms:.6f}")
+        print(f"  Samples changed:   {changed_pct:.1f}%")
+
+        # Convert back to PCM bytes
+        enhanced = enhanced.squeeze()
+        enhanced = torch.clamp(enhanced, -1.0, 1.0)
+        enhanced_np = (enhanced.numpy() * 32768.0).astype(np.int16)
+        denoised_bytes = enhanced_np.tobytes()
+
+        # Write denoised output
+        denoised_path = output_path.with_name(
+            f"{output_path.stem}_denoised{output_path.suffix}"
+        )
+        write_wav(str(denoised_path), denoised_bytes, sample_rate)
+
+        denoised_duration = len(denoised_bytes) / (sample_rate * 2)
+        print(f"  Denoised duration: {denoised_duration:.1f}s")
+        print(f"  Denoise time:      {denoise_ms:.0f}ms")
+        print(f"  Output written to: {denoised_path}")
+
+    except ImportError:
+        print(f"  Skipped: 'denoiser' package not installed")
+        print(f"  Install with: pip install denoiser")
+    except Exception as e:
+        print(f"  Error: {e}")
 
     total_ms = (time.monotonic() - verify_start) * 1000
-    print(f"\n  Output written to: {output_path}")
-    print(f"  Total pipeline:    {total_ms:.0f}ms")
+    print(f"\n  Total pipeline:    {total_ms:.0f}ms")
     print()
 
 
