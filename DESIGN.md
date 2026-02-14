@@ -182,14 +182,19 @@ All arguments have environment variable fallbacks for Docker configuration:
 3. Validate voiceprints directory exists (exit 1 if not)
 4. Create `SpeakerVerifier` - loads ECAPA-TDNN model and all .npy voiceprints
 5. Validate at least one voiceprint loaded (exit 1 if not)
-6. Build `wyoming.info.Info` with ASR program/model metadata
-7. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
+6. Query upstream ASR for supported languages via `query_upstream_languages()`
+7. Build `wyoming.info.Info` with ASR program/model metadata and upstream languages
+8. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
 
 The handler factory uses `functools.partial` to pass `wyoming_info`, `verifier`, `upstream_uri`, and `tag_speaker` to each new handler instance.
 
 ### Wyoming Service Info
 
-The service registers as an ASR program named `"voice-match"` with model `"voice-match-proxy"`, language `["en"]`. This makes it appear as a standard STT service in Home Assistant.
+The service registers as an ASR program named `"voice-match"` with model `"voice-match-proxy"`. At startup, it queries the upstream ASR service for its supported languages and advertises those same languages to Home Assistant. If the upstream is unreachable, it falls back to an empty language list. This makes it appear as a standard STT service in Home Assistant and ensures it can be assigned to any pipeline the upstream ASR supports.
+
+### query_upstream_languages(uri, timeout) → List[str]
+
+Connects to the upstream ASR, sends a `Describe` event, and reads the `Info` response to collect all supported languages from its models. Returns a deduplicated list preserving order. Returns an empty list on any error (connection refused, timeout, etc.).
 
 ## Handler (handler.py)
 
@@ -514,10 +519,12 @@ import os
 import sys
 from functools import partial
 from pathlib import Path
+from typing import List
 
 import numpy as np
 
-from wyoming.info import AsrModel, AsrProgram, Attribution, Info
+from wyoming.client import AsyncClient
+from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncServer
 
 from . import __version__
@@ -525,6 +532,38 @@ from .handler import SpeakerVerifyHandler
 from .verify import SpeakerVerifier
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def query_upstream_languages(uri: str, timeout: float = 10.0) -> List[str]:
+    """Query the upstream ASR service for its supported languages."""
+    try:
+        async with AsyncClient.from_uri(uri) as client:
+            await client.write_event(Describe().event())
+            while True:
+                event = await asyncio.wait_for(client.read_event(), timeout=timeout)
+                if event is None:
+                    break
+                if Info.is_type(event.type):
+                    info = Info.from_event(event)
+                    languages = []
+                    for asr in info.asr:
+                        for model in asr.models:
+                            languages.extend(model.languages)
+                    seen = set()
+                    unique = []
+                    for lang in languages:
+                        if lang not in seen:
+                            seen.add(lang)
+                            unique.append(lang)
+                    if unique:
+                        _LOGGER.info(
+                            "Upstream ASR supports %d language(s): %s",
+                            len(unique), ", ".join(unique),
+                        )
+                        return unique
+    except Exception as exc:
+        _LOGGER.warning("Could not query upstream ASR languages: %s", exc)
+    return []
 
 
 def get_args() -> argparse.Namespace:
@@ -650,6 +689,13 @@ async def main() -> None:
         args.step_seconds,
     )
 
+    upstream_languages = await query_upstream_languages(args.upstream_uri)
+    if not upstream_languages:
+        _LOGGER.warning(
+            "Could not detect upstream ASR languages, defaulting to all. "
+            "Ensure the upstream ASR is running at %s", args.upstream_uri,
+        )
+
     wyoming_info = Info(
         asr=[
             AsrProgram(
@@ -665,7 +711,7 @@ async def main() -> None:
                     AsrModel(
                         name="voice-match-proxy",
                         description="ECAPA-TDNN speaker gate → upstream ASR",
-                        languages=["en"],
+                        languages=upstream_languages,
                         attribution=Attribution(
                             name="Wyoming Voice Match",
                             url="https://github.com/jxlarrea/wyoming-voice-match",
