@@ -90,10 +90,11 @@ The handler has two execution paths depending on audio length:
 5. Return transcript to Home Assistant
 
 **Sync Pipeline** (`_process_audio_sync`) - triggered at AudioStop if early pipeline hasn't responded:
-1. Used for short audio (< 5s, quiet room where AudioStop arrives quickly)
+1. Used for short audio (< 5s) or when early verify rejected but full-audio re-verify passes
 2. Verify speaker on full buffer
-3. If verified, forward full buffer to ASR (no extraction needed - quiet room)
-4. Return transcript or empty string
+3. If verified and audio > 3s, run speaker extraction to remove background noise
+4. Forward extracted audio to ASR
+5. Return transcript or empty string
 
 ### Speaker Verification (Three-Pass Strategy)
 
@@ -271,13 +272,14 @@ Called as a background task when 5s of audio is buffered.
 
 ### _process_audio_sync()
 
-Fallback path for short audio (AudioStop arrives before early verification triggers).
+Fallback path when early verification hasn't responded (short audio or early verify rejected).
 
 1. If empty buffer → return empty transcript
 2. Check `_verify_result_cache` (early verify rejected, re-try with full audio)
 3. If no cache → first-time verification on full buffer
-4. If matched → forward full buffer to ASR (no extraction needed - quiet room path), apply speaker tagging if enabled
-5. If rejected → return empty transcript
+4. If matched and audio > 3s → run speaker extraction, forward extracted audio to ASR, apply speaker tagging if enabled
+5. If matched and audio ≤ 3s → forward full buffer to ASR (too short for meaningful extraction)
+6. If rejected → return empty transcript
 
 ### _forward_to_upstream(audio_bytes: bytes) → str
 
