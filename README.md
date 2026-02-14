@@ -160,6 +160,29 @@ Alternatively, use any voice recorder app on your phone or computer and save the
 
 > **Tip:** The best results come from enrolling with **30 samples** at varied volumes and distances. The more variety in your samples, the more robust your voiceprint will be.
 
+#### Recording from a Satellite
+
+If you're using a Wyoming satellite (like the Home Assistant Voice PE), recording samples from your PC or phone may produce a voiceprint that doesn't match well with the satellite's microphone. For best results, record enrollment samples directly through the satellite using the `enroll_record` script.
+
+Stop the main service first, then run the recording script:
+
+```bash
+docker compose stop wyoming-voice-match
+
+docker compose run --rm --entrypoint python wyoming-voice-match \
+  -m scripts.enroll_record --speaker john --samples 10
+```
+
+The script listens on the same Wyoming port as the main service. Say your wake word on the satellite, speak naturally for a few seconds, and wait for the satellite to respond with a progress update (e.g., "Sample 1 of 5 saved. 4 remaining."). Repeat until all samples are collected. The script automatically runs enrollment and generates the voiceprint when done.
+
+Restart the main service afterward:
+
+```bash
+docker compose start wyoming-voice-match
+```
+
+> **Tip:** You can combine satellite and PC recordings. Record some samples from the satellite and place additional WAV files in `data/enrollment/<speaker>/`, then re-run enrollment. This produces a voiceprint that works well across different microphones.
+
 Generate the voiceprint:
 
 ```bash

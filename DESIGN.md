@@ -15,6 +15,7 @@ wyoming-voice-match/
 │   ├── __init__.py               # Empty, makes scripts a package
 │   ├── demo.py                   # Pipeline demo CLI (verify + extract a WAV file)
 │   ├── enroll.py                 # Voice enrollment CLI
+│   ├── enroll_record.py          # Record enrollment samples from a satellite
 │   └── test_verify.py            # Threshold tuning CLI
 ├── tools/
 │   └── record_samples.ps1        # Windows PowerShell recording helper
@@ -375,6 +376,46 @@ python -m scripts.enroll --delete john     # Delete voiceprint
 6. Save as `voiceprints/<speaker>.npy`
 
 **Key detail:** The voiceprint is L2-normalized (unit vector). This means cosine similarity reduces to a simple dot product during verification.
+
+## Satellite Enrollment Recording (scripts/enroll_record.py)
+
+CLI tool that records enrollment samples directly from a Wyoming satellite. This exists because satellite microphones (e.g., Home Assistant Voice PE) have different audio characteristics than PC/phone microphones. A voiceprint enrolled from PC recordings may not match well when the satellite streams audio. Recording through the satellite ensures the enrollment samples match the exact hardware the speaker will use.
+
+**Usage:**
+```bash
+# Stop the main service first (both use the same port):
+docker compose stop wyoming-voice-match
+
+python -m scripts.enroll_record --speaker john --samples 10
+
+# Restart afterward:
+docker compose start wyoming-voice-match
+```
+
+**How it works:**
+1. Starts a Wyoming ASR server on the configured listen port
+2. Registers as an ASR service so the satellite can connect
+3. For each sample: satellite wake word triggers audio streaming, handler buffers all audio until AudioStop, saves as WAV in `enrollment/<speaker>/satellite_NN.wav`
+4. Responds with a `Transcript` event containing progress (e.g., "Sample 1 of 5 saved. 4 remaining.") so the satellite speaks the update via TTS
+5. After all samples are collected, automatically runs `scripts.enroll` as a subprocess to generate the voiceprint
+6. Exits
+
+**Architecture:**
+- `EnrollRecordState` - shared state across handler instances: speaker name, target sample count, samples recorded counter, and an `asyncio.Event` to signal completion
+- `EnrollRecordHandler` - extends `AsyncEventHandler`, buffers audio chunks, saves WAV on AudioStop, sends progress transcript
+- Server runs as a background task; main coroutine awaits the done event, then cancels the server and runs enrollment
+
+**Arguments:**
+
+| CLI Flag | Env Var | Default | Description |
+|---|---|---|---|
+| `--speaker` | - | (required) | Speaker name |
+| `--samples` | - | `5` | Number of samples to record |
+| `--uri` | `LISTEN_URI` | `tcp://0.0.0.0:10350` | Wyoming server listen URI |
+| `--enrollment-dir` | `ENROLLMENT_DIR` | `/data/enrollment` | Root enrollment directory |
+| `--voiceprints-dir` | `VOICEPRINTS_DIR` | `/data/voiceprints` | Voiceprint output directory |
+| `--model-dir` | `MODEL_DIR` | `/data/models` | Model cache directory |
+| `--device` | `DEVICE` | `cuda` | Inference device |
 
 ## Test Script (scripts/test_verify.py)
 
@@ -770,6 +811,10 @@ See scripts/test_verify.py source in the main project. The complete file is incl
 ### scripts/demo.py
 
 See scripts/demo.py source in the main project. The complete file is included in the repository and matches the specification in the Demo Script section above.
+
+### scripts/enroll_record.py
+
+See scripts/enroll_record.py source in the main project. The complete file is included in the repository and matches the specification in the Satellite Enrollment Recording section above.
 
 ### Dockerfile
 
