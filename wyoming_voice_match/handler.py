@@ -226,6 +226,12 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         # Denoise extracted audio if enabled
         denoise_ms = 0.0
         if self.denoise_model is not None:
+            # A/B test: forward clean version first for comparison
+            clean_transcript = await self._forward_to_upstream(forward_audio)
+            _LOGGER.info(
+                "[%s] ASR (clean):    \"%s\"", sid, clean_transcript,
+            )
+
             denoise_start = time.monotonic()
             forward_audio = self._denoise_audio(forward_audio)
             denoise_ms = (time.monotonic() - denoise_start) * 1000
@@ -237,6 +243,10 @@ class SpeakerVerifyHandler(AsyncEventHandler):
 
         # Forward to ASR and respond immediately
         transcript = await self._forward_to_upstream(forward_audio)
+        if self.denoise_model is not None:
+            _LOGGER.info(
+                "[%s] ASR (denoised): \"%s\"", sid, transcript,
+            )
         tagged = self._tag_transcript(transcript, speaker_name)
         await self.write_event(Transcript(text=tagged).event())
         self._responded = True
@@ -343,6 +353,12 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             # Denoise extracted audio if enabled
             denoise_ms = 0.0
             if self.denoise_model is not None:
+                # A/B test: forward clean version first for comparison
+                clean_transcript = await self._forward_to_upstream(asr_audio)
+                _LOGGER.info(
+                    "[%s] ASR (clean):    \"%s\"", sid, clean_transcript,
+                )
+
                 denoise_start = time.monotonic()
                 asr_audio = self._denoise_audio(asr_audio)
                 denoise_ms = (time.monotonic() - denoise_start) * 1000
@@ -354,6 +370,10 @@ class SpeakerVerifyHandler(AsyncEventHandler):
 
             asr_start = time.monotonic()
             transcript = await self._forward_to_upstream(asr_audio)
+            if self.denoise_model is not None:
+                _LOGGER.info(
+                    "[%s] ASR (denoised): \"%s\"", sid, transcript,
+                )
             tagged = self._tag_transcript(transcript, result.matched_speaker)
             await self.write_event(Transcript(text=tagged).event())
             self._responded = True
