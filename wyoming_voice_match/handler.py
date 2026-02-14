@@ -299,23 +299,39 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 for name, score in result.all_scores.items():
                     _LOGGER.debug("[%s]   %s: %.4f", sid, name, score)
 
-            # Forward full buffer to ASR (AudioStop path = quiet room, no trimming needed)
+            # Extract speaker audio to remove background noise
+            asr_audio = audio_bytes
+            extract_ms = 0.0
+            if result.matched_speaker and audio_duration > 3.0:
+                async with _MODEL_LOCK:
+                    loop = asyncio.get_running_loop()
+                    extract_start = time.monotonic()
+                    asr_audio = await loop.run_in_executor(
+                        None,
+                        self.verifier.extract_speaker_audio,
+                        audio_bytes,
+                        result.matched_speaker,
+                        self._audio_rate,
+                    )
+                    extract_ms = (time.monotonic() - extract_start) * 1000
+
+            asr_duration = len(asr_audio) / bytes_per_second
             _LOGGER.debug(
                 "[%s] Forwarding %.1fs to ASR",
-                sid, audio_duration,
+                sid, asr_duration,
             )
 
             asr_start = time.monotonic()
-            transcript = await self._forward_to_upstream(audio_bytes)
+            transcript = await self._forward_to_upstream(asr_audio)
             tagged = self._tag_transcript(transcript, result.matched_speaker)
             await self.write_event(Transcript(text=tagged).event())
             self._responded = True
             total_elapsed = self._elapsed_ms()
             _LOGGER.info(
                 "[%s] Pipeline complete in %.0fms: \"%s\" "
-                "(verify=%.0fms)",
+                "(verify=%.0fms, extract=%.0fms)",
                 sid, total_elapsed, tagged,
-                verify_ms,
+                verify_ms, extract_ms,
             )
         else:
             total_elapsed = self._elapsed_ms()
