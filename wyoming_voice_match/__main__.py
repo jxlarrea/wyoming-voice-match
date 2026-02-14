@@ -134,12 +134,6 @@ def get_args() -> argparse.Namespace:
         default=os.environ.get("REQUIRE_SPEAKER_MATCH", "true").lower() in ("true", "1", "yes"),
         help="Require speaker verification to pass before forwarding audio (default: true)",
     )
-    parser.add_argument(
-        "--denoise",
-        action="store_true",
-        default=os.environ.get("DENOISE", "false").lower() in ("true", "1", "yes"),
-        help="Apply Facebook Denoiser (Demucs) to extracted audio before ASR (default: false)",
-    )
 
     return parser.parse_args()
 
@@ -197,7 +191,7 @@ async def main() -> None:
     _LOGGER.info(
         "Speaker verifier ready — %d speaker(s) enrolled "
         "(threshold=%.2f, extraction=%.2f, device=%s, verify_window=%.1fs, "
-        "sliding_window=%.1fs/%.1fs, require_match=%s, denoise=%s)",
+        "sliding_window=%.1fs/%.1fs, require_match=%s)",
         len(verifier.voiceprints),
         args.threshold,
         args.extraction_threshold,
@@ -206,24 +200,7 @@ async def main() -> None:
         args.window_seconds,
         args.step_seconds,
         args.require_speaker_match,
-        args.denoise,
     )
-
-    # Pre-load denoiser model if enabled
-    denoise_model = None
-    if args.denoise:
-        try:
-            from denoiser.pretrained import master64
-            _LOGGER.info("Loading Facebook Denoiser (master64)...")
-            denoise_model = master64()
-            denoise_model.eval()
-            _LOGGER.info("Facebook Denoiser ready")
-        except ImportError:
-            _LOGGER.error(
-                "DENOISE=true but 'denoiser' package not installed. "
-                "Add 'denoiser>=0.1.5' to requirements.txt"
-            )
-            sys.exit(1)
 
     # Build Wyoming service info
     # Query upstream ASR for supported languages so HA can assign
@@ -278,7 +255,6 @@ async def main() -> None:
             args.upstream_uri,
             args.tag_speaker,
             args.require_speaker_match,
-            denoise_model,
         )
     )
 
