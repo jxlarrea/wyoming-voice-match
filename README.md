@@ -31,6 +31,44 @@ Home Assistant voice satellites listen for a wake word, then stream audio to a s
 
 Wyoming Voice Match solves both: it verifies that the audio contains **your voice** before allowing it through, and it uses voiceprint-based speaker extraction to isolate your command - removing TV dialogue and other speakers - before sending clean audio to the speech-to-text service.
 
+### Before and After
+
+In this example, a TV is blasting in the background while the user says *"Tell me the weather and then turn on the living room lights"*. The raw audio captured by the satellite contains both the TV dialogue and the user's command:
+
+**Before processing (raw satellite audio — 13.9s):**
+
+https://github.com/user-attachments/assets/e0b2927f-3880-4d1a-90e2-0f1d4bc0085b
+
+**After processing (extracted speaker audio — 5.8s):**
+
+https://github.com/user-attachments/assets/a6eafd93-468c-4443-a516-ed1fb3d7f33c
+
+Here's what the pipeline did behind the scenes:
+
+```
+--- Speaker Verification ---
+Speech detected: 6.5-8.7s (2.1s segment, peak_energy=7020)
+Pass 1 (speech): verifying 2.1s segment 1/3 (6.5-8.7s)
+Pass 1 (speech) matched segment 1 in 237ms (0.4909)
+
+  Speaker              Similarity   Result
+  ──────────────────── ──────────   ──────────
+  jx                       0.4909   MATCH
+
+--- Speaker Extraction ---
+Found 4 speech regions: 0.7-5.7s, 6.5-9.2s, 9.6-11.6s, 12.0-12.9s
+
+  Region 0.7-5.7s  → trimmed to 2.7-5.7s, KEEP (0.40)
+  Region 6.5-9.2s  → KEEP (0.48)
+  Region 9.6-11.6s → discarded (0.09)
+  Region 12.0-12.9s → discarded (0.13)
+
+  Input:  13.9s → Output: 5.8s (59% discarded)
+  Total pipeline: 313ms
+```
+
+The extraction identified 4 speech regions in the audio. Regions 1 and 2 matched the enrolled voiceprint (the user's voice) while regions 3 and 4 were TV dialogue and were discarded. Region 1 was further trimmed — its first 2 seconds were TV audio that overlapped with the start of the user's speech, and the sub-region scan narrowed it down to just the user's portion.
+
 ## How It Works
 
 Wyoming Voice Match sits between Home Assistant and your ASR (speech-to-text) service. When a wake word is detected, Home Assistant opens a connection and starts streaming audio. Here's what happens:
