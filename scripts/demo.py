@@ -1,8 +1,8 @@
-"""Demo script - run the full verification and extraction pipeline on a WAV file.
+"""Demo script - run the full verification, extraction, and enhancement pipeline on a WAV file.
 
 Simulates what happens when audio is processed by the proxy: verifies the
-speaker, extracts their voice segments, and writes the result as a WAV file
-you can listen to and compare against the original.
+speaker, extracts their voice segments, runs speech enhancement, and writes
+the results as WAV files you can listen to and compare against the original.
 
 Thresholds are read from VERIFY_THRESHOLD and EXTRACTION_THRESHOLD environment
 variables (set in docker-compose.yml), matching the main service configuration.
@@ -10,8 +10,9 @@ variables (set in docker-compose.yml), matching the main service configuration.
 Usage:
     python -m scripts.demo --speaker john --input test.wav --output cleaned.wav
 
-The output WAV contains only the audio that would be sent to your upstream
-ASR service - everything else (TV, other speakers, background noise) is removed.
+Produces two output files:
+    cleaned.wav           - extracted speaker audio (what ASR normally receives)
+    cleaned_enhanced.wav  - same audio after SepFormer speech enhancement
 """
 
 import argparse
@@ -207,6 +208,33 @@ def main() -> None:
     total_ms = (time.monotonic() - verify_start) * 1000
     print(f"\n  Output written to: {output_path}")
     print(f"  Total pipeline:    {total_ms:.0f}ms")
+
+    # Step 3: Speech enhancement
+    print(f"\n  --- Speech Enhancement ---")
+    from wyoming_voice_match.enhance import SpeechEnhancer
+
+    enhance_start = time.monotonic()
+    enhancer = SpeechEnhancer(
+        model_dir=args.model_dir,
+        device=args.device,
+    )
+    load_ms = (time.monotonic() - enhance_start) * 1000
+    print(f"  Model loaded:      {load_ms:.0f}ms")
+
+    infer_start = time.monotonic()
+    enhanced_bytes = enhancer.enhance(extracted_bytes, sample_rate)
+    infer_ms = (time.monotonic() - infer_start) * 1000
+    print(f"  Enhancement time:  {infer_ms:.0f}ms")
+
+    # Write enhanced WAV alongside the extracted output
+    stem = output_path.stem
+    enhanced_path = output_path.with_name(f"{stem}_enhanced{output_path.suffix}")
+    write_wav(str(enhanced_path), enhanced_bytes, sample_rate)
+
+    print(f"  Enhanced written:  {enhanced_path}")
+    print(f"\n  Compare the two files to hear the difference:")
+    print(f"    Extracted:  {output_path}")
+    print(f"    Enhanced:   {enhanced_path}")
     print()
 
 
