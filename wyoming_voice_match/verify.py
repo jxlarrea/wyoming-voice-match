@@ -106,8 +106,8 @@ class SpeakerVerifier:
         """Verify if audio matches any enrolled speaker.
 
         Uses a multi-pass strategy to handle background noise:
-        1. Speech pass: extract the highest-energy segment (likely the voice
-           command) and verify just that.
+        1. Speech pass: extract up to 3 energy peaks and verify each —
+           in noisy environments the loudest peak may be TV, not the user.
         2. First-N pass: verify only the first MAX_VERIFY_SECONDS of audio.
         3. Sliding window pass: scan the full audio with overlapping windows.
 

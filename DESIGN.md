@@ -100,7 +100,7 @@ The handler has two execution paths depending on audio length:
 
 The `verify()` method uses multiple passes to handle noisy environments:
 
-**Pass 1 - Speech segment:** Energy analysis finds the loudest 1s+ segment in the audio (likely the user's voice near the mic). Extract ECAPA-TDNN embedding from just that segment. If it matches a voiceprint above threshold → accept.
+**Pass 1 - Speech segments (multi-candidate):** Energy analysis finds up to 3 energy peaks in the audio, ranked by intensity. In noisy environments, the loudest peak may be TV or background audio rather than the user's voice. Each candidate segment is verified against the voiceprint in order — if the first (loudest) rejects, the next peak is tried. This allows the system to find the user's voice even when it's not the loudest sound in the room. If any candidate matches → accept.
 
 **Pass 2 - First-N seconds:** If pass 1 fails, verify the first `MAX_VERIFY_SECONDS` of audio as a single chunk. This works when the voice is distributed across the audio rather than concentrated. If it matches → accept.
 
@@ -342,13 +342,15 @@ Three-stage speaker extraction as described in Pipeline Architecture. Returns co
 Sliding window scan used for both edge trimming and rescue scanning. Scans the entire region, finds the longest contiguous run of windows matching the threshold, and returns only that portion. Returns None if no matches found.
 
 **`_extract_speech_segment(audio_bytes, sample_rate) → Optional[Tuple[bytes, float, float]]`**
-Energy-based speech detection for verification pass 1:
+Convenience wrapper — returns the top candidate from `_extract_speech_candidates()`.
+
+**`_extract_speech_candidates(audio_bytes, sample_rate, max_candidates=3) → List[Tuple[bytes, float, float]]`**
+Multi-candidate energy-based speech detection for verification pass 1:
 - 50ms frames, compute RMS energy per frame
-- Peak frame = loudest
-- Energy threshold = peak / 2
-- Find longest contiguous region above threshold
-- Expand to minimum 1s
-- Returns (segment_bytes, start_sec, end_sec)
+- Find up to 3 energy peaks by iteratively selecting the loudest frame, expanding outward while energy stays above 15% of peak, then masking that region
+- Each candidate is expanded to minimum 1s
+- Returns list of (segment_bytes, start_sec, end_sec) ranked by energy
+- In noisy environments, the loudest peak may be TV — subsequent candidates allow pass 1 to find the speaker's voice even when it's quieter than the background
 
 **`_verify_chunk(audio_bytes, sample_rate) → VerificationResult`**
 Core verification: extract embedding, compare against all voiceprints, return best match.
