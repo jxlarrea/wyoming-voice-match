@@ -36,6 +36,7 @@ from pathlib import Path
 
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
+from wyoming.client import AsyncClient
 from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncServer
@@ -201,6 +202,11 @@ def main() -> None:
         help="URI to listen on (default: tcp://0.0.0.0:10350)",
     )
     parser.add_argument(
+        "--upstream-uri",
+        default=os.environ.get("UPSTREAM_URI", "tcp://localhost:10300"),
+        help="Upstream ASR URI to query for supported languages",
+    )
+    parser.add_argument(
         "--enrollment-dir",
         default=os.environ.get("ENROLLMENT_DIR", "/data/enrollment"),
         help="Root directory for enrollment samples",
@@ -243,8 +249,49 @@ def main() -> None:
     )
 
 
+async def _query_upstream_languages(uri: str, timeout: float = 10.0) -> list:
+    """Query the upstream ASR service for its supported languages."""
+    try:
+        async with AsyncClient.from_uri(uri) as client:
+            await client.write_event(Describe().event())
+            while True:
+                event = await asyncio.wait_for(client.read_event(), timeout=timeout)
+                if event is None:
+                    break
+                if Info.is_type(event.type):
+                    info = Info.from_event(event)
+                    languages = []
+                    for asr in info.asr:
+                        for model in asr.models:
+                            languages.extend(model.languages)
+                    seen = set()
+                    unique = []
+                    for lang in languages:
+                        if lang not in seen:
+                            seen.add(lang)
+                            unique.append(lang)
+                    if unique:
+                        _LOGGER.info(
+                            "Upstream ASR supports %d language(s): %s",
+                            len(unique), ", ".join(unique[:5]),
+                        )
+                        return unique
+    except Exception as exc:
+        _LOGGER.warning("Could not query upstream ASR languages: %s", exc)
+    return []
+
+
 async def run_server(args, speaker_name: str, output_dir: Path) -> None:
     """Run the Wyoming server for recording."""
+    # Query upstream ASR for supported languages
+    languages = await _query_upstream_languages(args.upstream_uri)
+    if not languages:
+        _LOGGER.warning(
+            "Could not query upstream ASR at %s for languages, defaulting to ['en']",
+            args.upstream_uri,
+        )
+        languages = ["en"]
+
     wyoming_info = Info(
         asr=[
             AsrProgram(
@@ -260,7 +307,7 @@ async def run_server(args, speaker_name: str, output_dir: Path) -> None:
                     AsrModel(
                         name="enrollment",
                         description="Recording enrollment samples",
-                        languages=[],
+                        languages=languages,
                         attribution=Attribution(
                             name="Wyoming Voice Match",
                             url="https://github.com/jxlarrea/wyoming-voice-match",
