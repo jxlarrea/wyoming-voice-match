@@ -255,6 +255,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `EXTRACTION_THRESHOLD` | `0.25` | Cosine similarity threshold for speaker extraction — regions below this are discarded |
 | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded to ASR instead of being rejected — enrolled speakers still get verification and extraction |
 | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts (useful for LLM-based conversation agents) |
+| `ENHANCE_AUDIO` | `false` | Run speech enhancement (SepFormer denoising) on extracted audio before ASR — experimental, may improve or degrade transcription depending on environment |
 | `LOG_LEVEL` | `DEBUG` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`). Auto-detects: falls back to CPU if CUDA is unavailable |
 | `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |

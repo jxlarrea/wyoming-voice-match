@@ -14,6 +14,7 @@ from wyoming.info import Describe, Info
 from wyoming.server import AsyncEventHandler
 
 from .verify import SpeakerVerifier, VerificationResult
+from .enhance import SpeechEnhancer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         upstream_uri: str,
         tag_speaker: bool = False,
         require_speaker_match: bool = True,
+        enhancer: Optional[SpeechEnhancer] = None,
         *args,
         **kwargs,
     ) -> None:
@@ -47,6 +49,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self.upstream_uri = upstream_uri
         self.tag_speaker = tag_speaker
         self.require_speaker_match = require_speaker_match
+        self.enhancer = enhancer
 
         # Per-connection state
         self._audio_buffer = bytes()
@@ -218,6 +221,9 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         asr_duration = len(forward_audio) / bytes_per_second
         _LOGGER.debug("[%s] Forwarding %.1fs to ASR", sid, asr_duration)
 
+        # Enhance audio if enabled
+        forward_audio, enhance_ms = await self._maybe_enhance(forward_audio, sid)
+
         # Forward to ASR and respond immediately
         transcript = await self._forward_to_upstream(forward_audio)
         tagged = self._tag_transcript(transcript, speaker_name)
@@ -227,9 +233,9 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         total_elapsed = self._elapsed_ms()
         _LOGGER.info(
             "[%s] Pipeline complete in %.0fms: \"%s\" "
-            "(verify=%.0fms, extract=%.0fms)",
+            "(verify=%.0fms, extract=%.0fms, enhance=%.0fms)",
             sid, total_elapsed, tagged,
-            verify_ms, extract_ms,
+            verify_ms, extract_ms, enhance_ms,
         )
 
     async def _process_audio_sync(self) -> None:
@@ -323,6 +329,9 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 sid, asr_duration,
             )
 
+            # Enhance audio if enabled
+            asr_audio, enhance_ms = await self._maybe_enhance(asr_audio, sid)
+
             asr_start = time.monotonic()
             transcript = await self._forward_to_upstream(asr_audio)
             tagged = self._tag_transcript(transcript, result.matched_speaker)
@@ -331,9 +340,9 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             total_elapsed = self._elapsed_ms()
             _LOGGER.info(
                 "[%s] Pipeline complete in %.0fms: \"%s\" "
-                "(verify=%.0fms, extract=%.0fms)",
+                "(verify=%.0fms, extract=%.0fms, enhance=%.0fms)",
                 sid, total_elapsed, tagged,
-                verify_ms, extract_ms,
+                verify_ms, extract_ms, enhance_ms,
             )
         else:
             if not self.require_speaker_match:
@@ -368,6 +377,30 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         if self.tag_speaker and speaker_name and transcript:
             return f"[{speaker_name}] {transcript}"
         return transcript
+
+    async def _maybe_enhance(self, audio_bytes: bytes, sid: str) -> tuple:
+        """Run speech enhancement if enabled. Returns (audio_bytes, enhance_ms)."""
+        if not self.enhancer:
+            return audio_bytes, 0.0
+        async with _MODEL_LOCK:
+            loop = asyncio.get_running_loop()
+            enhance_start = time.monotonic()
+            enhanced = await loop.run_in_executor(
+                None,
+                self.enhancer.enhance,
+                audio_bytes,
+                self._audio_rate,
+                self._audio_width,
+            )
+            enhance_ms = (time.monotonic() - enhance_start) * 1000
+        bytes_per_second = (
+            self._audio_rate * self._audio_width * self._audio_channels
+        )
+        _LOGGER.debug(
+            "[%s] Enhanced %.1fs audio in %.0fms",
+            sid, len(audio_bytes) / bytes_per_second, enhance_ms,
+        )
+        return enhanced, enhance_ms
 
     def _elapsed_ms(self) -> float:
         """Milliseconds since stream start."""
