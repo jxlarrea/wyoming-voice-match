@@ -116,6 +116,7 @@ class EnrollRecordHandler(AsyncEventHandler):
 
         if AudioStart.is_type(event.type):
             self._audio_buffer = bytes()
+            _LOGGER.info("── Audio session started, recording... ──")
             return True
 
         if AudioChunk.is_type(event.type):
