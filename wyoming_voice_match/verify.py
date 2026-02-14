@@ -487,16 +487,12 @@ class SpeakerVerifier:
                 region_duration = (end_frame - start_frame) * frame_ms / 1000
                 if region_duration >= sub_scan_min_seconds:
                     # Stage 3: Sub-region scan to trim non-speaker edges.
-                    # Use a threshold midway between the extraction threshold
-                    # and the region's overall similarity. This adapts to the
-                    # actual signal: if the region scored 0.41 with extraction
-                    # threshold 0.25, trim threshold becomes 0.33 - high enough
-                    # to cut TV-only edges but low enough to keep voice+TV mix.
-                    trim_threshold = (similarity_threshold + similarity) / 2
+                    # Uses the extraction threshold directly — it's already
+                    # tuned to separate speaker voice from background audio.
                     trimmed = self._trim_region(
                         audio_bytes, start_frame, end_frame,
                         frame_size, bytes_per_sample, voiceprint,
-                        sample_rate, trim_threshold,
+                        sample_rate, similarity_threshold,
                         sub_scan_window_seconds, sub_scan_step_seconds,
                         frame_ms,
                     )
