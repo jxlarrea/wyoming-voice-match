@@ -10,7 +10,7 @@ Usage:
     docker compose stop wyoming-voice-match
 
     # Record 5 samples:
-    docker compose run --rm --entrypoint python wyoming-voice-match \
+    docker compose run --rm --service-ports --entrypoint python wyoming-voice-match \
       -m scripts.enroll_record --speaker jx --samples 10
 
     # Restart the main service:

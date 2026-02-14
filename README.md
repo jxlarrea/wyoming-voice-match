@@ -169,7 +169,7 @@ Stop the main service first, then run the recording script:
 ```bash
 docker compose stop wyoming-voice-match
 
-docker compose run --rm --entrypoint python wyoming-voice-match \
+docker compose run --rm --service-ports --entrypoint python wyoming-voice-match \
   -m scripts.enroll_record --speaker john --samples 10
 ```
 
