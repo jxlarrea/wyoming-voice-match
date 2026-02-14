@@ -137,35 +137,48 @@ class SpeakerVerifier:
         speech_start_sec: Optional[float] = None
         speech_end_sec: Optional[float] = None
 
-        # --- Pass 1: energy-based speech segment ---
+        # --- Pass 1: energy-based speech segments ---
+        # Try up to 3 energy peaks — in noisy environments the loudest
+        # peak may be TV/radio, not the speaker's voice.
         pass1_start = time.monotonic()
-        speech_result = self._extract_speech_segment(audio_bytes, sample_rate)
-        if speech_result is not None:
-            speech_chunk, speech_start_sec, speech_end_sec = speech_result
-            speech_duration = len(speech_chunk) / bytes_per_second
-            _LOGGER.debug(
-                "Pass 1 (speech): verifying %.1fs speech segment from %.1fs audio",
-                speech_duration,
-                audio_duration,
-            )
-            result = self._verify_chunk(speech_chunk, sample_rate)
-            best_result = result
-            pass1_elapsed = (time.monotonic() - pass1_start) * 1000
-
-            if result.is_match:
+        candidates = self._extract_speech_candidates(audio_bytes, sample_rate)
+        if candidates:
+            speech_chunk, speech_start_sec, speech_end_sec = candidates[0]
+            for i, (chunk, start_sec, end_sec) in enumerate(candidates):
+                chunk_duration = len(chunk) / bytes_per_second
                 _LOGGER.debug(
-                    "Pass 1 (speech) matched in %.0fms (%.4f)",
-                    pass1_elapsed, result.similarity,
+                    "Pass 1 (speech): verifying %.1fs segment %d/%d (%.1f-%.1fs)",
+                    chunk_duration, i + 1, len(candidates),
+                    start_sec, end_sec,
                 )
-                _LOGGER.debug("Total verification time: %.0fms", pass1_elapsed)
-                result.speech_audio = speech_chunk
-                result.speech_start_sec = speech_start_sec
-                result.speech_end_sec = speech_end_sec
-                return result
+                result = self._verify_chunk(chunk, sample_rate)
+                if best_result is None or result.similarity > best_result.similarity:
+                    best_result = result
+                    speech_chunk = chunk
+                    speech_start_sec = start_sec
+                    speech_end_sec = end_sec
+                pass1_elapsed = (time.monotonic() - pass1_start) * 1000
 
+                if result.is_match:
+                    _LOGGER.debug(
+                        "Pass 1 (speech) matched segment %d in %.0fms (%.4f)",
+                        i + 1, pass1_elapsed, result.similarity,
+                    )
+                    _LOGGER.debug("Total verification time: %.0fms", pass1_elapsed)
+                    result.speech_audio = speech_chunk
+                    result.speech_start_sec = speech_start_sec
+                    result.speech_end_sec = speech_end_sec
+                    return result
+
+                _LOGGER.debug(
+                    "Pass 1 (speech) segment %d rejected (%.4f)",
+                    i + 1, result.similarity,
+                )
+
+            pass1_elapsed = (time.monotonic() - pass1_start) * 1000
             _LOGGER.debug(
-                "Pass 1 (speech) rejected in %.0fms (%.4f)",
-                pass1_elapsed, result.similarity,
+                "Pass 1 (speech) all %d segments rejected in %.0fms (best=%.4f)",
+                len(candidates), pass1_elapsed, best_result.similarity,
             )
         else:
             pass1_elapsed = (time.monotonic() - pass1_start) * 1000
@@ -274,13 +287,28 @@ class SpeakerVerifier:
 
         Computes RMS energy in short frames, finds the peak region, and
         expands outward until energy drops below a fraction of the peak.
-        Returns (speech_bytes, start_seconds) or None if audio is too short.
+        Returns (speech_bytes, start_seconds, end_seconds) or None if audio
+        is too short.
+        """
+        candidates = self._extract_speech_candidates(audio_bytes, sample_rate)
+        if candidates:
+            return candidates[0]
+        return None
+
+    def _extract_speech_candidates(
+        self, audio_bytes: bytes, sample_rate: int, max_candidates: int = 3
+    ) -> list:
+        """Extract multiple candidate speech segments ranked by energy.
+
+        Returns a list of (speech_bytes, start_seconds, end_seconds) tuples,
+        one per energy peak. In noisy environments the loudest peak may be
+        background audio (TV, radio), so callers can try each candidate.
         """
         bytes_per_second = sample_rate * 2
         min_segment_bytes = int(1.0 * bytes_per_second)  # at least 1 second
 
         if len(audio_bytes) < min_segment_bytes:
-            return None
+            return []
 
         audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
 
@@ -289,55 +317,68 @@ class SpeakerVerifier:
         num_frames = len(audio_np) // frame_samples
 
         if num_frames < 2:
-            return None
+            return []
 
         frames = audio_np[: num_frames * frame_samples].reshape(num_frames, frame_samples)
         rms = np.sqrt(np.mean(frames ** 2, axis=1))
 
-        # Find the frame with peak energy
-        peak_idx = int(np.argmax(rms))
-        peak_energy = rms[peak_idx]
-
+        peak_energy = float(np.max(rms))
         if peak_energy < 100:  # near-silence, skip
-            return None
+            return []
 
-        # Expand outward from peak while energy stays above 15% of peak
-        energy_threshold = peak_energy * 0.15
+        # Find multiple energy peaks by masking out each found region
+        rms_remaining = rms.copy()
+        candidates = []
 
-        start_frame = peak_idx
-        while start_frame > 0 and rms[start_frame - 1] >= energy_threshold:
-            start_frame -= 1
+        for _ in range(max_candidates):
+            peak_idx = int(np.argmax(rms_remaining))
+            if rms_remaining[peak_idx] < 100:
+                break
 
-        end_frame = peak_idx
-        while end_frame < num_frames - 1 and rms[end_frame + 1] >= energy_threshold:
-            end_frame += 1
+            # Expand outward from peak while energy stays above 15% of peak
+            energy_threshold = rms_remaining[peak_idx] * 0.15
 
-        # Convert frame indices back to byte offsets
-        start_byte = start_frame * frame_samples * 2
-        end_byte = (end_frame + 1) * frame_samples * 2
+            start_frame = peak_idx
+            while start_frame > 0 and rms[start_frame - 1] >= energy_threshold:
+                start_frame -= 1
 
-        segment = audio_bytes[start_byte:end_byte]
+            end_frame = peak_idx
+            while end_frame < num_frames - 1 and rms[end_frame + 1] >= energy_threshold:
+                end_frame += 1
 
-        # Ensure minimum length
-        if len(segment) < min_segment_bytes:
-            # Expand symmetrically to reach minimum
-            deficit = min_segment_bytes - len(segment)
-            expand = deficit // 2
-            start_byte = max(0, start_byte - expand)
-            end_byte = min(len(audio_bytes), end_byte + expand)
+            # Convert frame indices back to byte offsets
+            start_byte = start_frame * frame_samples * 2
+            end_byte = (end_frame + 1) * frame_samples * 2
+
             segment = audio_bytes[start_byte:end_byte]
 
-        segment_duration = len(segment) / bytes_per_second
-        offset_seconds = start_byte / bytes_per_second
-        _LOGGER.debug(
-            "Speech detected: %.1f-%.1fs (%.1fs segment, peak_energy=%.0f)",
-            offset_seconds,
-            offset_seconds + segment_duration,
-            segment_duration,
-            peak_energy,
-        )
+            # Ensure minimum length
+            if len(segment) < min_segment_bytes:
+                deficit = min_segment_bytes - len(segment)
+                expand = deficit // 2
+                start_byte = max(0, start_byte - expand)
+                end_byte = min(len(audio_bytes), end_byte + expand)
+                segment = audio_bytes[start_byte:end_byte]
 
-        return segment, offset_seconds, offset_seconds + segment_duration
+            segment_duration = len(segment) / bytes_per_second
+            offset_seconds = start_byte / bytes_per_second
+
+            candidates.append(
+                (segment, offset_seconds, offset_seconds + segment_duration)
+            )
+
+            # Mask out this region so next iteration finds a different peak
+            rms_remaining[start_frame:end_frame + 1] = 0
+
+        # Log only the top candidate (as before)
+        if candidates:
+            seg, start_s, end_s = candidates[0]
+            _LOGGER.debug(
+                "Speech detected: %.1f-%.1fs (%.1fs segment, peak_energy=%.0f)",
+                start_s, end_s, end_s - start_s, peak_energy,
+            )
+
+        return candidates
 
     def _verify_chunk(self, audio_bytes: bytes, sample_rate: int) -> VerificationResult:
         """Verify a single chunk of audio against all enrolled voiceprints."""
