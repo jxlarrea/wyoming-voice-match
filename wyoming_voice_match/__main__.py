@@ -16,7 +16,6 @@ from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncServer
 
 from . import __version__
-from .enhance import SpeechEnhancer
 from .handler import SpeakerVerifyHandler
 from .verify import SpeakerVerifier
 
@@ -135,12 +134,6 @@ def get_args() -> argparse.Namespace:
         default=os.environ.get("REQUIRE_SPEAKER_MATCH", "true").lower() in ("true", "1", "yes"),
         help="Require speaker verification to pass before forwarding audio (default: true)",
     )
-    parser.add_argument(
-        "--isolate-voice",
-        action="store_true",
-        default=os.environ.get("ISOLATE_VOICE", "false").lower() in ("true", "1", "yes"),
-        help="Run voice isolation on extracted audio before ASR (default: false)",
-    )
 
     return parser.parse_args()
 
@@ -209,16 +202,6 @@ async def main() -> None:
         args.require_speaker_match,
     )
 
-    # Load speech enhancer (optional)
-    enhancer = None
-    if args.isolate_voice:
-        enhancer = SpeechEnhancer(
-            model_dir=args.model_dir,
-            device=args.device,
-        )
-    else:
-        _LOGGER.debug("Voice isolation disabled (ISOLATE_VOICE=false)")
-
     # Build Wyoming service info
     # Query upstream ASR for supported languages so HA can assign
     # this proxy to any pipeline the upstream supports
@@ -272,7 +255,6 @@ async def main() -> None:
             args.upstream_uri,
             args.tag_speaker,
             args.require_speaker_match,
-            enhancer,
         )
     )
 

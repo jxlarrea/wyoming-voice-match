@@ -14,7 +14,6 @@ Complete technical specification for Wyoming Voice Match. This document contains
   - [AudioStop Synchronization](#audiostop-synchronization)
 - [Entry Point (__main__.py)](#entry-point-__main__py)
 - [Handler (handler.py)](#handler-handlerpy)
-- [Enhancer (enhance.py)](#enhancer-enhancepy)
 - [Verifier (verify.py)](#verifier-verifypy)
 - [Enrollment (scripts/enroll.py)](#enrollment-scriptsenrollpy)
 - [Satellite Enrollment Recording (scripts/enroll_record.py)](#satellite-enrollment-recording-scriptsenroll_recordpy)
@@ -34,7 +33,6 @@ wyoming-voice-match/
 │   ├── __init__.py               # Version string (__version__ = "1.0.0")
 │   ├── __main__.py               # Entry point, arg parsing, server setup
 │   ├── handler.py                # Wyoming event handler (ASR proxy logic)
-│   ├── enhance.py                # Optional speech enhancement (SepFormer denoising)
 │   └── verify.py                 # ECAPA-TDNN speaker verification + extraction
 ├── scripts/
 │   ├── __init__.py               # Empty, makes scripts a package
@@ -196,7 +194,6 @@ All arguments have environment variable fallbacks for Docker configuration:
 | `--extraction-threshold` | `EXTRACTION_THRESHOLD` | `0.25` | Extraction similarity threshold |
 | `--require-speaker-match` | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded instead of rejected — enrolled speakers still get extraction |
 | `--tag-speaker` | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts |
-| `--isolate-voice` | `ISOLATE_VOICE` | `false` | Run voice isolation on extracted audio before ASR |
 | `--debug` | `LOG_LEVEL=DEBUG` | `INFO` | Enable debug logging |
 | `--device` | `DEVICE` | `cuda` | `cuda` or `cpu` (auto-detects, falls back to cpu) |
 | `--voiceprints-dir` | `VOICEPRINTS_DIR` | `/data/voiceprints` | Directory with .npy voiceprints |
@@ -212,12 +209,11 @@ All arguments have environment variable fallbacks for Docker configuration:
 3. Validate voiceprints directory exists (exit 1 if not)
 4. Create `SpeakerVerifier` - loads ECAPA-TDNN model and all .npy voiceprints
 5. Validate at least one voiceprint loaded (exit 1 if `require_speaker_match` is true, warn if false)
-6. If `isolate_voice` is true, create `SpeechEnhancer` - loads SepFormer enhancement model
-7. Query upstream ASR for supported languages via `query_upstream_languages()`
-8. Build `wyoming.info.Info` with ASR program/model metadata and upstream languages
-9. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
+6. Query upstream ASR for supported languages via `query_upstream_languages()`
+7. Build `wyoming.info.Info` with ASR program/model metadata and upstream languages
+8. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
 
-The handler factory uses `functools.partial` to pass `wyoming_info`, `verifier`, `upstream_uri`, `tag_speaker`, `require_speaker_match`, and `enhancer` to each new handler instance.
+The handler factory uses `functools.partial` to pass `wyoming_info`, `verifier`, `upstream_uri`, `tag_speaker`, and `require_speaker_match` to each new handler instance.
 
 ### Wyoming Service Info
 
@@ -242,7 +238,6 @@ Extends `wyoming.server.AsyncEventHandler`. One instance per TCP connection.
 - `upstream_uri: str` - ASR service URI
 - `tag_speaker: bool` - whether to prepend `[speaker_name]` to transcripts
 - `require_speaker_match: bool` - when false, bypass verification and forward all audio directly
-- `enhancer: Optional[SpeechEnhancer]` - speech enhancement model (None if disabled)
 - `_audio_buffer: bytes` - accumulated PCM audio (keeps growing even after verification)
 - `_audio_rate: int` - sample rate (default 16000)
 - `_audio_width: int` - bytes per sample (default 2 = 16-bit)
@@ -327,37 +322,6 @@ Sends audio to the upstream Wyoming ASR service:
 ### _tag_transcript(transcript: str, speaker_name: Optional[str]) → str
 
 Prepends `[speaker_name]` to the transcript when `tag_speaker` is enabled. Returns the transcript unchanged if tagging is disabled, speaker name is None, or transcript is empty. Useful for LLM-based conversation agents that can use the speaker identity for personalization.
-
-### _maybe_isolate(audio_bytes: bytes, sid: str) → (bytes, float)
-
-If `self.enhancer` is set (ISOLATE_VOICE > 0), runs voice isolation on the audio under `_MODEL_LOCK` and returns `(isolated_bytes, isolate_ms)`. If enhancer is None, returns the input unchanged with `isolate_ms=0.0`. Called after extraction and before `_forward_to_upstream()` in both the early pipeline and sync paths.
-
-## Enhancer (enhance.py)
-
-### Class: SpeechEnhancer
-
-Optional voice isolation module that removes residual background noise from extracted speaker audio before forwarding to ASR. Uses a SepFormer model via SpeechBrain. Language-agnostic — operates on acoustic features, not linguistic content.
-
-Controlled by `ISOLATE_VOICE` (true/false). When false, no model is loaded and no VRAM is used.
-
-**Constructor parameters:**
-- `model_dir: str` - directory to cache downloaded model weights
-- `device: str` - "cuda" or "cpu" (auto-falls-back to cpu)
-- `model_source: str` - HuggingFace model identifier (default: `speechbrain/sepformer-wham16k-enhancement`)
-
-**On construction:**
-1. Import `SepformerSeparation` from SpeechBrain (deferred to avoid loading when disabled)
-2. Auto-detect CUDA availability, fall back to CPU if needed
-3. Load pretrained SepFormer enhancement model (~113 MB)
-
-### enhance(audio_bytes, sample_rate, sample_width) → bytes
-
-1. Convert raw 16-bit PCM bytes to float32 tensor in [-1.0, 1.0] range
-2. Run SepFormer inference (`separate_batch`) — outputs enhanced waveform
-3. Take first source channel, clamp to valid range
-4. Convert back to 16-bit PCM bytes
-
-**Pipeline position:** After speaker extraction, before ASR forwarding. Only runs when a speaker was matched (not on bypass/unmatched audio).
 
 ## Verifier (verify.py)
 
@@ -1029,7 +993,6 @@ services:
       - HF_HOME=/data/hf_cache
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
-      # - ISOLATE_VOICE=false              # Run voice isolation on extracted audio before ASR
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size
@@ -1063,7 +1026,6 @@ services:
       - HF_HOME=/data/hf_cache
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
-      # - ISOLATE_VOICE=false              # Run voice isolation on extracted audio before ASR
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size

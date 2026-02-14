@@ -255,7 +255,6 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `EXTRACTION_THRESHOLD` | `0.25` | Cosine similarity threshold for speaker extraction — regions below this are discarded |
 | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded to ASR instead of being rejected — enrolled speakers still get verification and extraction |
 | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts (useful for LLM-based conversation agents) |
-| `ISOLATE_VOICE` | `false` | Run voice isolation (SepFormer) on extracted audio before ASR — experimental, aggressively removes background noise but may alter voice characteristics |
 | `LOG_LEVEL` | `DEBUG` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`). Auto-detects: falls back to CPU if CUDA is unavailable |
 | `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |
@@ -354,17 +353,7 @@ The script uses `VERIFY_THRESHOLD` and `EXTRACTION_THRESHOLD` from your `docker-
 The script will:
 - Verify the speaker against all enrolled voiceprints (showing similarity scores)
 - Run speaker extraction, showing each detected speech region and whether it was kept or discarded
-- Write the extracted audio as a WAV file containing only your voice
-- Run voice isolation and write an isolated version for A/B comparison
-
-Output files produced:
-
-| File | Description |
-|------|-------------|
-| `cleaned.wav` | Extracted speaker audio (what ASR receives normally) |
-| `cleaned_isolated.wav` | Same audio after SepFormer voice isolation |
-
-Send both files to your ASR service to test whether isolation improves transcription accuracy, then set `ISOLATE_VOICE=true` in your compose file if it helps.
+- Write the result as a WAV file containing only your voice
 
 This is useful for understanding how the extraction works, tuning your thresholds, or just confirming that TV audio is being properly removed.
 

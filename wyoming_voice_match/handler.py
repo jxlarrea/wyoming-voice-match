@@ -14,7 +14,6 @@ from wyoming.info import Describe, Info
 from wyoming.server import AsyncEventHandler
 
 from .verify import SpeakerVerifier, VerificationResult
-from .enhance import SpeechEnhancer
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +37,6 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         upstream_uri: str,
         tag_speaker: bool = False,
         require_speaker_match: bool = True,
-        enhancer: Optional[SpeechEnhancer] = None,
         *args,
         **kwargs,
     ) -> None:
@@ -49,7 +47,6 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self.upstream_uri = upstream_uri
         self.tag_speaker = tag_speaker
         self.require_speaker_match = require_speaker_match
-        self.enhancer = enhancer
 
         # Per-connection state
         self._audio_buffer = bytes()
@@ -221,9 +218,6 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         asr_duration = len(forward_audio) / bytes_per_second
         _LOGGER.debug("[%s] Forwarding %.1fs to ASR", sid, asr_duration)
 
-        # Isolate voice if enabled
-        forward_audio, isolate_ms = await self._maybe_isolate(forward_audio, sid)
-
         # Forward to ASR and respond immediately
         transcript = await self._forward_to_upstream(forward_audio)
         tagged = self._tag_transcript(transcript, speaker_name)
@@ -231,12 +225,11 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self._responded = True
 
         total_elapsed = self._elapsed_ms()
-        timing = f"verify={verify_ms:.0f}ms, extract={extract_ms:.0f}ms"
-        if isolate_ms > 0:
-            timing += f", isolate={isolate_ms:.0f}ms"
         _LOGGER.info(
-            "[%s] Pipeline complete in %.0fms: \"%s\" (%s)",
-            sid, total_elapsed, tagged, timing,
+            "[%s] Pipeline complete in %.0fms: \"%s\" "
+            "(verify=%.0fms, extract=%.0fms)",
+            sid, total_elapsed, tagged,
+            verify_ms, extract_ms,
         )
 
     async def _process_audio_sync(self) -> None:
@@ -330,21 +323,17 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 sid, asr_duration,
             )
 
-            # Isolate voice if enabled
-            asr_audio, isolate_ms = await self._maybe_isolate(asr_audio, sid)
-
             asr_start = time.monotonic()
             transcript = await self._forward_to_upstream(asr_audio)
             tagged = self._tag_transcript(transcript, result.matched_speaker)
             await self.write_event(Transcript(text=tagged).event())
             self._responded = True
             total_elapsed = self._elapsed_ms()
-            timing = f"verify={verify_ms:.0f}ms, extract={extract_ms:.0f}ms"
-            if isolate_ms > 0:
-                timing += f", isolate={isolate_ms:.0f}ms"
             _LOGGER.info(
-                "[%s] Pipeline complete in %.0fms: \"%s\" (%s)",
-                sid, total_elapsed, tagged, timing,
+                "[%s] Pipeline complete in %.0fms: \"%s\" "
+                "(verify=%.0fms, extract=%.0fms)",
+                sid, total_elapsed, tagged,
+                verify_ms, extract_ms,
             )
         else:
             if not self.require_speaker_match:
@@ -379,30 +368,6 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         if self.tag_speaker and speaker_name and transcript:
             return f"[{speaker_name}] {transcript}"
         return transcript
-
-    async def _maybe_isolate(self, audio_bytes: bytes, sid: str) -> tuple:
-        """Run voice isolation if enabled. Returns (audio_bytes, isolate_ms)."""
-        if not self.enhancer:
-            return audio_bytes, 0.0
-        async with _MODEL_LOCK:
-            loop = asyncio.get_running_loop()
-            isolate_start = time.monotonic()
-            isolated = await loop.run_in_executor(
-                None,
-                self.enhancer.enhance,
-                audio_bytes,
-                self._audio_rate,
-                self._audio_width,
-            )
-            isolate_ms = (time.monotonic() - isolate_start) * 1000
-        bytes_per_second = (
-            self._audio_rate * self._audio_width * self._audio_channels
-        )
-        _LOGGER.debug(
-            "[%s] Isolated %.1fs audio in %.0fms",
-            sid, len(audio_bytes) / bytes_per_second, isolate_ms,
-        )
-        return isolated, isolate_ms
 
     def _elapsed_ms(self) -> float:
         """Milliseconds since stream start."""

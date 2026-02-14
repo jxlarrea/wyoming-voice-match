@@ -1,8 +1,8 @@
-"""Demo script - run the full verification, extraction, and voice isolation pipeline on a WAV file.
+"""Demo script - run the full verification and extraction pipeline on a WAV file.
 
 Simulates what happens when audio is processed by the proxy: verifies the
-speaker, extracts their voice segments, runs voice isolation, and writes
-the results as WAV files you can listen to and compare.
+speaker, extracts their voice segments, and writes the result as a WAV file
+you can listen to and compare against the original.
 
 Thresholds are read from VERIFY_THRESHOLD and EXTRACTION_THRESHOLD environment
 variables (set in docker-compose.yml), matching the main service configuration.
@@ -10,9 +10,8 @@ variables (set in docker-compose.yml), matching the main service configuration.
 Usage:
     python -m scripts.demo --speaker john --input test.wav --output cleaned.wav
 
-Produces two output files:
-    cleaned.wav           - extracted speaker audio (what ASR receives normally)
-    cleaned_isolated.wav  - same audio after SepFormer voice isolation
+The output WAV contains only the audio that would be sent to your upstream
+ASR service - everything else (TV, other speakers, background noise) is removed.
 """
 
 import argparse
@@ -208,32 +207,6 @@ def main() -> None:
     total_ms = (time.monotonic() - verify_start) * 1000
     print(f"\n  Output written to: {output_path}")
     print(f"  Total pipeline:    {total_ms:.0f}ms")
-
-    # Step 3: Voice isolation
-    print(f"\n  --- Voice Isolation ---")
-    from wyoming_voice_match.enhance import SpeechEnhancer
-
-    enhance_start = time.monotonic()
-    enhancer = SpeechEnhancer(
-        model_dir=args.model_dir,
-        device=args.device,
-    )
-    load_ms = (time.monotonic() - enhance_start) * 1000
-    print(f"  Model loaded:      {load_ms:.0f}ms")
-
-    infer_start = time.monotonic()
-    isolated_bytes = enhancer.enhance(extracted_bytes, sample_rate)
-    infer_ms = (time.monotonic() - infer_start) * 1000
-    print(f"  Isolation time:    {infer_ms:.0f}ms")
-
-    stem = output_path.stem
-    isolated_path = output_path.with_name(f"{stem}_isolated{output_path.suffix}")
-    write_wav(str(isolated_path), isolated_bytes, sample_rate)
-
-    print(f"\n  Compare the two files to hear the difference:")
-    print(f"    Extracted:  {output_path}")
-    print(f"    Isolated:   {isolated_path}")
-    print(f"\n  To test transcription accuracy, send each file to your ASR service.")
     print()
 
 
