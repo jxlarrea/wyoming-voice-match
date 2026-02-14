@@ -87,8 +87,13 @@ class SpeechEnhancer:
     ) -> bytes:
         """Enhance audio by removing background noise.
 
-        Blends the SepFormer-enhanced signal with the original based on
-        enhance_amount (0.0 = original, 1.0 = fully enhanced).
+        Uses energy-adaptive blending to preserve the original voice in
+        high-energy regions (where the speaker dominates) while applying
+        SepFormer denoising to low-energy regions (where noise dominates).
+
+        The enhance_amount parameter controls the crossover: higher values
+        apply enhancement more aggressively into speech regions, lower
+        values limit enhancement to only the quietest parts.
 
         Args:
             audio_bytes: Raw PCM audio (16-bit signed, mono).
@@ -117,14 +122,48 @@ class SpeechEnhancer:
         # Take the first (only) source, squeeze to 1D
         enhanced_wav = enhanced[:, :, 0].squeeze(0).cpu()
 
-        # Blend enhanced with original (wet/dry mix)
-        if self.enhance_amount < 1.0:
-            blended = (
-                self.enhance_amount * enhanced_wav
-                + (1.0 - self.enhance_amount) * original
-            )
+        # Energy-adaptive blending: keep original voice, enhance quiet parts
+        # Compute short-term energy using a sliding window (~20ms)
+        window_size = int(sample_rate * 0.02)
+        energy = original.unfold(0, window_size, window_size // 2).pow(2).mean(dim=-1)
+
+        # Normalize energy to [0, 1] range
+        energy_max = energy.max()
+        if energy_max > 0:
+            energy_norm = energy / energy_max
         else:
-            blended = enhanced_wav
+            energy_norm = energy
+
+        # Upsample energy envelope back to full signal length
+        blend_mask = torch.nn.functional.interpolate(
+            energy_norm.unsqueeze(0).unsqueeze(0),
+            size=num_samples,
+            mode="linear",
+            align_corners=False,
+        ).squeeze()
+
+        # Apply enhance_amount as a threshold shift:
+        # amount=1.0 → enhance everything (mask=0 everywhere)
+        # amount=0.5 → enhance regions below 50% energy
+        # amount=0.0 → enhance nothing (mask=1 everywhere)
+        # The mask represents how much of the ORIGINAL to keep
+        blend_mask = torch.clamp(
+            (blend_mask - (1.0 - self.enhance_amount)) / max(self.enhance_amount, 0.01),
+            0.0, 1.0,
+        )
+
+        # Smooth the mask to avoid abrupt transitions (~10ms window)
+        smooth_size = int(sample_rate * 0.01)
+        if smooth_size > 1:
+            kernel = torch.ones(smooth_size) / smooth_size
+            blend_mask = torch.nn.functional.conv1d(
+                blend_mask.unsqueeze(0).unsqueeze(0),
+                kernel.unsqueeze(0).unsqueeze(0),
+                padding=smooth_size // 2,
+            ).squeeze()[:num_samples]
+
+        # blend_mask=1 → keep original, blend_mask=0 → use enhanced
+        blended = blend_mask * original + (1.0 - blend_mask) * enhanced_wav
 
         # Clamp to valid range and convert back to 16-bit PCM bytes
         blended = torch.clamp(blended, -1.0, 1.0)

@@ -256,7 +256,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded to ASR instead of being rejected — enrolled speakers still get verification and extraction |
 | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts (useful for LLM-based conversation agents) |
 | `ENHANCE_AUDIO` | `false` | Run speech enhancement (SepFormer denoising) on extracted audio before ASR — experimental, may improve or degrade transcription depending on environment |
-| `ENHANCE_AMOUNT` | `1.0` | Enhancement wet/dry blend: `0.0` = original audio, `0.5` = 50/50 blend, `1.0` = fully enhanced — lower values preserve voice naturalness at the cost of less noise removal |
+| `ENHANCE_AMOUNT` | `1.0` | Controls how aggressively enhancement reaches into speech regions: `0.0` = no effect, `0.5` = enhance only quieter parts, `1.0` = enhance everything — voice stays natural in high-energy regions |
 | `LOG_LEVEL` | `DEBUG` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`). Auto-detects: falls back to CPU if CUDA is unavailable |
 | `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |

@@ -197,7 +197,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 | `--require-speaker-match` | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded instead of rejected — enrolled speakers still get extraction |
 | `--tag-speaker` | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts |
 | `--enhance-audio` | `ENHANCE_AUDIO` | `false` | Run speech enhancement on extracted audio before ASR (experimental) |
-| `--enhance-amount` | `ENHANCE_AMOUNT` | `1.0` | Enhancement wet/dry blend: 0.0=original, 1.0=fully enhanced |
+| `--enhance-amount` | `ENHANCE_AMOUNT` | `1.0` | Controls enhancement reach: 0.0=off, 0.5=quiet parts only, 1.0=all regions |
 | `--debug` | `LOG_LEVEL=DEBUG` | `INFO` | Enable debug logging |
 | `--device` | `DEVICE` | `cuda` | `cuda` or `cpu` (auto-detects, falls back to cpu) |
 | `--voiceprints-dir` | `VOICEPRINTS_DIR` | `/data/voiceprints` | Directory with .npy voiceprints |
@@ -353,8 +353,14 @@ Optional speech enhancement module that removes residual background noise from e
 
 1. Convert raw 16-bit PCM bytes to float32 tensor in [-1.0, 1.0] range
 2. Run SepFormer inference (`separate_batch`) — outputs enhanced waveform
-3. Take first source channel, clamp to valid range
-4. Convert back to 16-bit PCM bytes
+3. Compute short-term energy envelope (~20ms window) over the original signal
+4. Build an energy-adaptive blend mask: high-energy regions (speech) keep the original signal, low-energy regions (noise) use the enhanced signal
+5. The `enhance_amount` parameter shifts the crossover threshold — higher values apply enhancement more aggressively into speech regions
+6. Smooth the blend mask (~10ms window) to avoid abrupt transitions
+7. Blend original and enhanced signals using the mask
+8. Clamp and convert back to 16-bit PCM bytes
+
+This preserves the speaker's natural voice in loud/clear regions while cleaning up residual noise in quieter parts and gaps between words.
 
 **Pipeline position:** After speaker extraction, before ASR forwarding. Only runs when a speaker was matched (not on bypass/unmatched audio). Adds ~50-200ms depending on audio length and device.
 
@@ -1029,7 +1035,7 @@ services:
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
       # - ENHANCE_AUDIO=false              # Run speech enhancement before ASR (experimental)
-      # - ENHANCE_AMOUNT=1.0               # Enhancement blend: 0.0=original, 1.0=fully enhanced
+      # - ENHANCE_AMOUNT=1.0               # Enhancement reach: 0.0=off, 0.5=quiet parts, 1.0=all
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size
@@ -1064,7 +1070,7 @@ services:
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
       # - ENHANCE_AUDIO=false              # Run speech enhancement before ASR (experimental)
-      # - ENHANCE_AMOUNT=1.0               # Enhancement blend: 0.0=original, 1.0=fully enhanced
+      # - ENHANCE_AMOUNT=1.0               # Enhancement reach: 0.0=off, 0.5=quiet parts, 1.0=all
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size

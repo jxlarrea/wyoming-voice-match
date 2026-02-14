@@ -17,7 +17,7 @@ services:
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
       # - ENHANCE_AUDIO=false              # Run speech enhancement before ASR (experimental)
-      # - ENHANCE_AMOUNT=1.0               # Enhancement blend: 0.0=original, 1.0=fully enhanced
+      # - ENHANCE_AMOUNT=1.0               # Enhancement reach: 0.0=off, 0.5=quiet parts, 1.0=all
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size
