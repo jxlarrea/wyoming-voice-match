@@ -200,6 +200,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 | `--window-seconds` | `VERIFY_WINDOW_SECONDS` | `3.0` | Sliding window size |
 | `--step-seconds` | `VERIFY_STEP_SECONDS` | `1.5` | Sliding window step |
 | `--tag-speaker` | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts |
+| `--require-speaker-match` | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, bypass verification and forward all audio directly |
 
 ### Startup Sequence
 
@@ -207,12 +208,12 @@ All arguments have environment variable fallbacks for Docker configuration:
 2. Configure logging (DEBUG or INFO)
 3. Validate voiceprints directory exists (exit 1 if not)
 4. Create `SpeakerVerifier` - loads ECAPA-TDNN model and all .npy voiceprints
-5. Validate at least one voiceprint loaded (exit 1 if not)
+5. Validate at least one voiceprint loaded (exit 1 if `require_speaker_match` is true, warn if false)
 6. Query upstream ASR for supported languages via `query_upstream_languages()`
 7. Build `wyoming.info.Info` with ASR program/model metadata and upstream languages
 8. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
 
-The handler factory uses `functools.partial` to pass `wyoming_info`, `verifier`, `upstream_uri`, and `tag_speaker` to each new handler instance.
+The handler factory uses `functools.partial` to pass `wyoming_info`, `verifier`, `upstream_uri`, `tag_speaker`, and `require_speaker_match` to each new handler instance.
 
 ### Wyoming Service Info
 
@@ -236,6 +237,7 @@ Extends `wyoming.server.AsyncEventHandler`. One instance per TCP connection.
 - `verifier: SpeakerVerifier` - shared verifier instance
 - `upstream_uri: str` - ASR service URI
 - `tag_speaker: bool` - whether to prepend `[speaker_name]` to transcripts
+- `require_speaker_match: bool` - when false, bypass verification and forward all audio directly
 - `_audio_buffer: bytes` - accumulated PCM audio (keeps growing even after verification)
 - `_audio_rate: int` - sample rate (default 16000)
 - `_audio_width: int` - bytes per sample (default 2 = 16-bit)
@@ -256,19 +258,20 @@ handle_event(event) dispatches by event type:
 Describe → write Info event back (service discovery)
 Transcribe → store language preference
 AudioStart → reset all per-stream state (including _audio_stopped)
-AudioChunk → ALWAYS append to buffer, check early verify trigger if not yet started
-AudioStop → set _audio_stopped event, then either log (if responded) or call _process_audio_sync
+AudioChunk → ALWAYS append to buffer, check early verify trigger if not yet started (skipped in bypass mode)
+AudioStop → set _audio_stopped event, then either log (if responded), forward directly (bypass mode), or call _process_audio_sync
 ```
 
 **AudioChunk handler (critical detail):**
 1. Always append chunk audio to `_audio_buffer` regardless of `_responded` state
-2. Only check early verification trigger if `not _verify_started and not _responded`
+2. Only check early verification trigger if `require_speaker_match and not _verify_started and not _responded`
 3. If `buffered_seconds >= max_verify_seconds`: set `_verify_started = True`, snapshot buffer, create `_run_early_pipeline` task
 
 **AudioStop handler:**
 1. Always set `_audio_stopped.set()` (even if already responded)
 2. If `_responded` is True, log and return
-3. Otherwise call `_process_audio_sync()` (short audio fallback)
+3. If `require_speaker_match` is False, call `_forward_without_verification()` (bypass mode)
+4. Otherwise call `_process_audio_sync()` (short audio fallback)
 
 ### _run_early_pipeline(verify_audio: bytes)
 
@@ -303,6 +306,14 @@ Fallback path when early verification hasn't responded (short audio or early ver
 4. If matched and audio > 3s → run speaker extraction, forward extracted audio to ASR, apply speaker tagging if enabled
 5. If matched and audio ≤ 3s → forward full buffer to ASR (too short for meaningful extraction)
 6. If rejected → return empty transcript
+
+### _forward_without_verification()
+
+Bypass path when `require_speaker_match` is false. Forwards all buffered audio directly to upstream ASR without verification or extraction.
+
+1. If empty buffer → return empty transcript
+2. Forward full buffer to ASR via `_forward_to_upstream()`
+3. Log pipeline result with "(bypass, no verification)" indicator
 
 ### _forward_to_upstream(audio_bytes: bytes) → str
 
@@ -989,6 +1000,7 @@ services:
       - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
       # - TAG_SPEAKER=true                # Prepend [speaker_name] to transcripts
+      # - REQUIRE_SPEAKER_MATCH=true       # Set to false to bypass verification
     deploy:
       resources:
         reservations:
@@ -1018,6 +1030,7 @@ services:
       - HF_HOME=/data/hf_cache
       - LOG_LEVEL=DEBUG
       # - TAG_SPEAKER=true                # Prepend [speaker_name] to transcripts
+      # - REQUIRE_SPEAKER_MATCH=true       # Set to false to bypass verification
 ```
 
 ### requirements.txt

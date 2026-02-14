@@ -18,3 +18,4 @@ services:
       # - VERIFY_WINDOW_SECONDS=3.0       # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5         # Sliding window step size
       # - TAG_SPEAKER=true                # Prepend [speaker_name] to transcripts
+      # - REQUIRE_SPEAKER_MATCH=true       # Set to false to bypass verification

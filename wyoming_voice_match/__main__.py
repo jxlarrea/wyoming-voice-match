@@ -128,6 +128,12 @@ def get_args() -> argparse.Namespace:
         default=os.environ.get("TAG_SPEAKER", "false").lower() in ("true", "1", "yes"),
         help="Prepend [speaker_name] to transcripts (default: false)",
     )
+    parser.add_argument(
+        "--require-speaker-match",
+        action="store_true",
+        default=os.environ.get("REQUIRE_SPEAKER_MATCH", "true").lower() in ("true", "1", "yes"),
+        help="Require speaker verification to pass before forwarding audio (default: true)",
+    )
 
     return parser.parse_args()
 
@@ -167,18 +173,25 @@ async def main() -> None:
     )
 
     if not verifier.voiceprints:
-        _LOGGER.error(
-            "No voiceprints found in %s. "
-            "Run the enrollment script first: "
-            "python -m scripts.enroll --speaker <name>",
-            voiceprints_dir,
-        )
-        sys.exit(1)
+        if args.require_speaker_match:
+            _LOGGER.error(
+                "No voiceprints found in %s. "
+                "Run the enrollment script first: "
+                "python -m scripts.enroll --speaker <n>",
+                voiceprints_dir,
+            )
+            sys.exit(1)
+        else:
+            _LOGGER.warning(
+                "No voiceprints found in %s — running in bypass mode "
+                "(all audio forwarded without verification)",
+                voiceprints_dir,
+            )
 
     _LOGGER.info(
         "Speaker verifier ready — %d speaker(s) enrolled "
         "(threshold=%.2f, extraction=%.2f, device=%s, verify_window=%.1fs, "
-        "sliding_window=%.1fs/%.1fs)",
+        "sliding_window=%.1fs/%.1fs, require_match=%s)",
         len(verifier.voiceprints),
         args.threshold,
         args.extraction_threshold,
@@ -186,6 +199,7 @@ async def main() -> None:
         args.max_verify_seconds,
         args.window_seconds,
         args.step_seconds,
+        args.require_speaker_match,
     )
 
     # Build Wyoming service info
@@ -240,6 +254,7 @@ async def main() -> None:
             verifier,
             args.upstream_uri,
             args.tag_speaker,
+            args.require_speaker_match,
         )
     )
 

@@ -260,6 +260,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `VERIFY_WINDOW_SECONDS` | `3.0` | Sliding window size (in seconds) for the fallback verification pass |
 | `VERIFY_STEP_SECONDS` | `1.5` | Step size (in seconds) between sliding windows |
 | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts (useful for LLM-based conversation agents) |
+| `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, audio is forwarded to ASR without verification or extraction — useful before enrollment or for mixed households |
 
 ### Tuning the Threshold
 

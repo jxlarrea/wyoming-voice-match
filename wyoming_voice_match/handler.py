@@ -36,6 +36,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         verifier: SpeakerVerifier,
         upstream_uri: str,
         tag_speaker: bool = False,
+        require_speaker_match: bool = True,
         *args,
         **kwargs,
     ) -> None:
@@ -45,6 +46,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self.verifier = verifier
         self.upstream_uri = upstream_uri
         self.tag_speaker = tag_speaker
+        self.require_speaker_match = require_speaker_match
 
         # Per-connection state
         self._audio_buffer = bytes()
@@ -94,7 +96,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             self._audio_buffer += chunk.audio
 
             # Trigger verification once we have enough audio
-            if not self._verify_started and not self._responded:
+            if self.require_speaker_match and not self._verify_started and not self._responded:
                 bytes_per_second = (
                     self._audio_rate * self._audio_width * self._audio_channels
                 )
@@ -124,6 +126,11 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                     "[%s] AudioStop received (already responded, %.0fms since start)",
                     sid, elapsed,
                 )
+                return True
+
+            if not self.require_speaker_match:
+                # Bypass mode — forward all audio directly to ASR
+                await self._forward_without_verification()
                 return True
 
             # Short audio — never triggered early verification
@@ -342,6 +349,40 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             )
             await self.write_event(Transcript(text="").event())
             self._responded = True
+
+    async def _forward_without_verification(self) -> None:
+        """Forward audio directly to ASR without speaker verification.
+
+        Used when REQUIRE_SPEAKER_MATCH is false — acts as a transparent
+        proxy, passing all audio through without verification or extraction.
+        """
+        sid = self._session_id
+        audio_bytes = bytes(self._audio_buffer)
+        bytes_per_second = self._audio_rate * self._audio_width * self._audio_channels
+        audio_duration = len(audio_bytes) / bytes_per_second
+        elapsed = self._elapsed_ms()
+
+        _LOGGER.debug(
+            "[%s] AudioStop received: %.1fs of audio (%d bytes), "
+            "stream duration: %.0fms (bypass mode)",
+            sid, audio_duration, len(audio_bytes), elapsed,
+        )
+
+        if not audio_bytes:
+            await self.write_event(Transcript(text="").event())
+            self._responded = True
+            return
+
+        transcript = await self._forward_to_upstream(audio_bytes)
+        _LOGGER.debug("[%s] Upstream transcript: %s", sid, transcript)
+
+        total_elapsed = self._elapsed_ms()
+        _LOGGER.info(
+            '[%s] Pipeline complete in %.0fms: "%s" (bypass, no verification)',
+            sid, total_elapsed, transcript,
+        )
+        await self.write_event(Transcript(text=transcript).event())
+        self._responded = True
 
     def _tag_transcript(self, transcript: str, speaker_name: Optional[str]) -> str:
         """Prepend [speaker_name] to transcript if tagging is enabled."""
