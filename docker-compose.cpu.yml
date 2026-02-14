@@ -16,7 +16,7 @@ services:
       - HF_HOME=/data/hf_cache
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
-      # - ENHANCE_AUDIO=false              # Run speech enhancement before ASR (experimental)
+      # - ISOLATE_VOICE=0                  # Voice isolation: 0=off, 0.5=moderate, 1.0=full
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size

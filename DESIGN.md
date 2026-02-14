@@ -34,7 +34,7 @@ wyoming-voice-match/
 │   ├── __init__.py               # Version string (__version__ = "1.0.0")
 │   ├── __main__.py               # Entry point, arg parsing, server setup
 │   ├── handler.py                # Wyoming event handler (ASR proxy logic)
-│   ├── enhance.py                # Optional speech enhancement (MetricGAN+ denoising)
+│   ├── enhance.py                # Optional speech enhancement (SepFormer denoising)
 │   └── verify.py                 # ECAPA-TDNN speaker verification + extraction
 ├── scripts/
 │   ├── __init__.py               # Empty, makes scripts a package
@@ -196,7 +196,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 | `--extraction-threshold` | `EXTRACTION_THRESHOLD` | `0.25` | Extraction similarity threshold |
 | `--require-speaker-match` | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded instead of rejected — enrolled speakers still get extraction |
 | `--tag-speaker` | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts |
-| `--enhance-audio` | `ENHANCE_AUDIO` | `false` | Run speech enhancement on extracted audio before ASR |
+| `--isolate-voice` | `ISOLATE_VOICE` | `0` | Voice isolation: 0=disabled, 0.5=moderate, 1.0=full |
 | `--debug` | `LOG_LEVEL=DEBUG` | `INFO` | Enable debug logging |
 | `--device` | `DEVICE` | `cuda` | `cuda` or `cpu` (auto-detects, falls back to cpu) |
 | `--voiceprints-dir` | `VOICEPRINTS_DIR` | `/data/voiceprints` | Directory with .npy voiceprints |
@@ -212,7 +212,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 3. Validate voiceprints directory exists (exit 1 if not)
 4. Create `SpeakerVerifier` - loads ECAPA-TDNN model and all .npy voiceprints
 5. Validate at least one voiceprint loaded (exit 1 if `require_speaker_match` is true, warn if false)
-6. If `enhance_audio` is true, create `SpeechEnhancer` - loads MetricGAN+ enhancement model
+6. If `isolate_voice` > 0, create `SpeechEnhancer` - loads SepFormer enhancement model
 7. Query upstream ASR for supported languages via `query_upstream_languages()`
 8. Build `wyoming.info.Info` with ASR program/model metadata and upstream languages
 9. Create `AsyncServer` and run with `SpeakerVerifyHandler` factory
@@ -330,31 +330,33 @@ Prepends `[speaker_name]` to the transcript when `tag_speaker` is enabled. Retur
 
 ### _maybe_enhance(audio_bytes: bytes, sid: str) → (bytes, float)
 
-If `self.enhancer` is set (ENHANCE_AUDIO=true), runs speech enhancement on the audio under `_MODEL_LOCK` and returns `(enhanced_bytes, enhance_ms)`. If enhancer is None, returns the input unchanged with `enhance_ms=0.0`. Called after extraction and before `_forward_to_upstream()` in both the early pipeline and sync paths.
+If `self.enhancer` is set (ISOLATE_VOICE > 0), runs speech enhancement on the audio under `_MODEL_LOCK` and returns `(enhanced_bytes, enhance_ms)`. If enhancer is None, returns the input unchanged with `enhance_ms=0.0`. Called after extraction and before `_forward_to_upstream()` in both the early pipeline and sync paths.
 
 ## Enhancer (enhance.py)
 
 ### Class: SpeechEnhancer
 
-Optional speech enhancement module that removes residual background noise from extracted speaker audio before forwarding to ASR. Uses MetricGAN+ via SpeechBrain, which applies spectral masking optimized for perceptual speech quality (PESQ). Language-agnostic — operates on spectral features, not linguistic content.
+Optional voice isolation module that removes residual background noise from extracted speaker audio before forwarding to ASR. Uses a SepFormer model via SpeechBrain. Language-agnostic — operates on acoustic features, not linguistic content.
 
-MetricGAN+ computes a mask in the frequency domain and multiplies it against the original spectrogram. This preserves voice characteristics because it filters the original signal rather than reconstructing it from scratch.
+Controlled by `ISOLATE_VOICE` (0.0–1.0): 0 disables it entirely (no model loaded), values between 0 and 1 blend the original and enhanced signals, and 1.0 applies full SepFormer enhancement.
 
 **Constructor parameters:**
 - `model_dir: str` - directory to cache downloaded model weights
 - `device: str` - "cuda" or "cpu" (auto-falls-back to cpu)
-- `model_source: str` - HuggingFace model identifier (default: `speechbrain/metricgan-plus-voicebank`)
+- `model_source: str` - HuggingFace model identifier (default: `speechbrain/sepformer-wham16k-enhancement`)
+- `isolate_voice: float` - blend level between original and enhanced (0.0–1.0)
 
 **On construction:**
-1. Import `SpectralMaskEnhancement` from SpeechBrain (deferred to avoid loading when disabled)
+1. Import `SepformerSeparation` from SpeechBrain (deferred to avoid loading when disabled)
 2. Auto-detect CUDA availability, fall back to CPU if needed
-3. Load pretrained MetricGAN+ model
+3. Load pretrained SepFormer enhancement model (~113 MB)
 
 ### enhance(audio_bytes, sample_rate, sample_width) → bytes
 
 1. Convert raw 16-bit PCM bytes to float32 tensor in [-1.0, 1.0] range
-2. Run `enhance_batch` with the tensor and a lengths tensor
-3. Clamp and convert back to 16-bit PCM bytes
+2. Run SepFormer inference (`separate_batch`) — outputs enhanced waveform
+3. Blend enhanced with original based on `isolate_voice` level
+4. Clamp and convert back to 16-bit PCM bytes
 
 **Pipeline position:** After speaker extraction, before ASR forwarding. Only runs when a speaker was matched (not on bypass/unmatched audio).
 
@@ -1028,7 +1030,7 @@ services:
       - HF_HOME=/data/hf_cache
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
-      # - ENHANCE_AUDIO=false              # Run speech enhancement before ASR (experimental)
+      # - ISOLATE_VOICE=0                  # Voice isolation: 0=off, 0.5=moderate, 1.0=full
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size
@@ -1062,7 +1064,7 @@ services:
       - HF_HOME=/data/hf_cache
       # - REQUIRE_SPEAKER_MATCH=true       # Set to false to forward unmatched audio
       # - TAG_SPEAKER=false                # Prepend [speaker_name] to transcripts
-      # - ENHANCE_AUDIO=false              # Run speech enhancement before ASR (experimental)
+      # - ISOLATE_VOICE=0                  # Voice isolation: 0=off, 0.5=moderate, 1.0=full
       # - MAX_VERIFY_SECONDS=5.0           # First-pass verification window
       # - VERIFY_WINDOW_SECONDS=3.0        # Sliding window size for fallback pass
       # - VERIFY_STEP_SECONDS=1.5          # Sliding window step size

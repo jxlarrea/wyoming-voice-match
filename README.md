@@ -255,7 +255,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `EXTRACTION_THRESHOLD` | `0.25` | Cosine similarity threshold for speaker extraction — regions below this are discarded |
 | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded to ASR instead of being rejected — enrolled speakers still get verification and extraction |
 | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts (useful for LLM-based conversation agents) |
-| `ENHANCE_AUDIO` | `false` | Run speech enhancement (MetricGAN+ denoising) on extracted audio before ASR — removes residual background noise while preserving voice naturalness |
+| `ISOLATE_VOICE` | `0` | Voice isolation level: `0` = disabled, `0.5` = moderate isolation, `1.0` = full isolation — uses SepFormer to remove residual background noise from extracted audio before ASR |
 | `LOG_LEVEL` | `DEBUG` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`). Auto-detects: falls back to CPU if CUDA is unavailable |
 | `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |
@@ -355,16 +355,19 @@ The script will:
 - Verify the speaker against all enrolled voiceprints (showing similarity scores)
 - Run speaker extraction, showing each detected speech region and whether it was kept or discarded
 - Write the extracted audio as a WAV file containing only your voice
-- Run speech enhancement and write an enhanced version for A/B comparison
+- Run voice isolation at multiple levels and write output files for A/B comparison
 
 Output files produced:
 
 | File | Description |
 |------|-------------|
-| `cleaned.wav` | Extracted speaker audio (what ASR receives without enhancement) |
-| `cleaned_enhanced.wav` | Same audio after MetricGAN+ speech enhancement |
+| `cleaned.wav` | Extracted speaker audio (ISOLATE_VOICE=0, disabled) |
+| `cleaned_isolated_25.wav` | 25% voice isolation |
+| `cleaned_isolated_50.wav` | 50% voice isolation |
+| `cleaned_isolated_75.wav` | 75% voice isolation |
+| `cleaned_isolated_100.wav` | Full voice isolation |
 
-Listen to each file to confirm enhancement helps in your environment, then set `ENHANCE_AUDIO=true` in your compose file.
+Listen to each file to find the level that gives the best ASR results, then set `ISOLATE_VOICE` to that value in your compose file.
 
 This is useful for understanding how the extraction works, tuning your thresholds, or just confirming that TV audio is being properly removed.
 

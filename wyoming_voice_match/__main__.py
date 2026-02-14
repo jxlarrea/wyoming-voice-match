@@ -136,10 +136,10 @@ def get_args() -> argparse.Namespace:
         help="Require speaker verification to pass before forwarding audio (default: true)",
     )
     parser.add_argument(
-        "--enhance-audio",
-        action="store_true",
-        default=os.environ.get("ENHANCE_AUDIO", "false").lower() in ("true", "1", "yes"),
-        help="Run speech enhancement on extracted audio before ASR (default: false)",
+        "--isolate-voice",
+        type=float,
+        default=float(os.environ.get("ISOLATE_VOICE", "0")),
+        help="Voice isolation level: 0=disabled, 0.5=moderate, 1.0=full (default: 0)",
     )
 
     return parser.parse_args()
@@ -211,13 +211,14 @@ async def main() -> None:
 
     # Load speech enhancer (optional)
     enhancer = None
-    if args.enhance_audio:
+    if args.isolate_voice > 0:
         enhancer = SpeechEnhancer(
             model_dir=args.model_dir,
             device=args.device,
+            isolate_voice=args.isolate_voice,
         )
     else:
-        _LOGGER.debug("Speech enhancement disabled (ENHANCE_AUDIO=false)")
+        _LOGGER.debug("Voice isolation disabled (ISOLATE_VOICE=0)")
 
     # Build Wyoming service info
     # Query upstream ASR for supported languages so HA can assign
