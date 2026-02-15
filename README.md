@@ -75,9 +75,9 @@ Wyoming Voice Match sits between Home Assistant and your ASR (speech-to-text) se
 
 ```mermaid
 flowchart LR
-    A["🎙️ Mic\n(Device)"] --> B["Wake Word\nDetection"]
+    A["🎙️ Mic (Device)"] --> B["Wake Word Detection"]
     B --> C["Wyoming Voice Match"]
-    C --> D["ASR Service\n(Transcribe)"]
+    C --> D["ASR Service (Transcribe)"]
 
     subgraph C["Wyoming Voice Match"]
         direction TB
