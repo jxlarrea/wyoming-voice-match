@@ -73,16 +73,21 @@ The extraction identified 4 speech regions in the audio. Regions 1 and 2 matched
 
 Wyoming Voice Match sits between Home Assistant and your ASR (speech-to-text) service. When a wake word is detected, Home Assistant opens a connection and starts streaming audio. Here's what happens:
 
-```
-┌──────────┐     ┌─────────────────┐     ┌───────────────────────┐     ┌──────────────┐
-│   Mic    │────▶│  Wake Word      │────▶│  Wyoming Voice Match  │────▶│ ASR Service  │
-│ (Device) │     │  Detection      │     │                       │     │ (Transcribe) │
-└──────────┘     └─────────────────┘     │  1. Buffer audio      │     └──────────────┘
-                                         │  2. Verify speaker    │
-                                         │  3. Wait for stream   │
-                                         │  4. Extract speaker   │
-                                         │  5. Forward to ASR    │
-                                         └───────────────────────┘
+```mermaid
+flowchart LR
+    A["🎙️ Mic\n(Device)"] --> B["Wake Word\nDetection"]
+    B --> C["Wyoming Voice Match"]
+    C --> D["ASR Service\n(Transcribe)"]
+
+    subgraph C["Wyoming Voice Match"]
+        direction TB
+        C1["1. Buffer audio"]
+        C2["2. Verify speaker"]
+        C3["3. Wait for stream"]
+        C4["4. Extract speaker"]
+        C5["5. Forward to ASR"]
+        C1 --> C2 --> C3 --> C4 --> C5
+    end
 ```
 
 ### Step by step
