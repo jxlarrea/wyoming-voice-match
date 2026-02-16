@@ -4,7 +4,7 @@ A [Wyoming protocol](https://github.com/OHF-Voice/wyoming) ASR proxy that verifi
 
 [![version](https://img.shields.io/github/v/release/jxlarrea/wyoming-voice-match?style=for-the-badge&color=orange)](https://github.com/jxlarrea/wyoming-voice-match/releases)
 [![Stars](https://img.shields.io/github/stars/jxlarrea/wyoming-voice-match?style=for-the-badge&color=yellow)](https://github.com/jxlarrea/wyoming-voice-match)
-[![GHCR](https://img.shields.io/badge/GHCR-Container-blue?style=for-the-badge&logo=docker&logoColor=green)](https://github.com/jxlarrea/wyoming-voice-match/pkgs/container/wyoming-voice-match)
+[![GHCR](https://img.shields.io/badge/GHCR-Container-blue?style=for-the-badge&logo=docker)](https://github.com/jxlarrea/wyoming-voice-match/pkgs/container/wyoming-voice-match)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/jxlarrea)
 
 
