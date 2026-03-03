@@ -5,7 +5,6 @@ LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification (CPU-o
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libsndfile1 \
@@ -13,20 +12,20 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies (CPU-only torch from PyTorch index)
 COPY requirements.cpu.txt .
-# Install torch CPU. We pin versions to ensure torchaudio has list_audio_backends
-# which SpeechBrain requires at import time.
-RUN pip install --no-cache-dir \
-        torch==2.4.1+cpu torchaudio==2.4.1+cpu --index-url https://download.pytorch.org/whl/cpu && \
+
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        pip install --no-cache-dir torch==2.4.1+cpu torchaudio==2.4.1+cpu --index-url https://download.pytorch.org/whl/cpu; \
+    else \
+        pip install --no-cache-dir torch==2.4.1 torchaudio==2.4.1; \
+    fi && \
     pip install --no-cache-dir soundfile && \
     pip install --no-cache-dir -r requirements.cpu.txt
 
-# Copy application code
 COPY wyoming_voice_match/ wyoming_voice_match/
 COPY scripts/ scripts/
 
-# Create data directory structure
 RUN mkdir -p /data/enrollment /data/voiceprints /data/models
 
 EXPOSE 10350
