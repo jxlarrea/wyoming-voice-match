@@ -10,12 +10,15 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir \
-        torch torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu121; \
+    else \
+        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu124; \
+    fi && \
     pip install --no-cache-dir -r requirements.txt && \
-    # Uninstall triton (~600MB, not needed for inference)
     pip uninstall -y triton 2>/dev/null; \
-    # Remove nvidia pip packages that duplicate libs in the CUDA 12.4+cuDNN runtime base
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cublas && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_nvrtc && \
@@ -26,20 +29,15 @@ RUN pip install --no-cache-dir \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusparse && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nccl && \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nvjitlink && \
-    # Remove duplicate CUDA libs from torch/lib (keep cusparseLt)
     cd /usr/local/lib/python3.10/dist-packages/torch/lib && \
     rm -f libnccl* libcublas* libcublasLt* libcusolver* \
           libcufft* libcurand* libnvrtc* libnvJitLink* libnvfuser* && \
-    # Remove static libs and test dirs
     find /usr/local/lib/python3.10/dist-packages/torch -name "*.a" -delete && \
     rm -rf /usr/local/lib/python3.10/dist-packages/torch/include && \
     rm -rf /usr/local/lib/python3.10/dist-packages/torch/share && \
-    # Remove unused pip deps
     pip uninstall -y sympy networkx 2>/dev/null; \
-    # Remove SpeechBrain extras
     rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/recipes && \
     rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/tests && \
-    # Clean caches
     find /usr/local/lib/python3.10/dist-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; \
     echo "Cleanup complete"
 
@@ -61,17 +59,13 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy only the installed Python packages from builder
 COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application code
 COPY wyoming_voice_match/ wyoming_voice_match/
 COPY scripts/ scripts/
 
-# Create data directory structure
 RUN mkdir -p /data/enrollment /data/voiceprints /data/models
 
 EXPOSE 10350
-
 ENTRYPOINT ["python", "-m", "wyoming_voice_match"]
