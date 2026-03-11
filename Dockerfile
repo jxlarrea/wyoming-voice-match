@@ -70,12 +70,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY wyoming_voice_match/ wyoming_voice_match/
 COPY scripts/ scripts/
 
-# Patch SpeechBrain's torchaudio backend check for nightly compatibility
-ARG TARGETARCH
-RUN if [ "$TARGETARCH" != "amd64" ]; then \
-        sed -i 's/available_backends = torchaudio.list_audio_backends()/available_backends = []/' \
-            /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py; \
-    fi
+# Patch SpeechBrain's torchaudio backend check (list_audio_backends removed in newer torchaudio)
+RUN sed -i 's/available_backends = torchaudio.list_audio_backends()/available_backends = []/' \
+        /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py
 
 RUN mkdir -p /data/enrollment /data/voiceprints /data/models
 
