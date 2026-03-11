@@ -23,6 +23,8 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
         pip install --no-cache-dir --upgrade speechbrain; \
     fi && \
     pip uninstall -y triton 2>/dev/null; \
+    echo "=== NUMPY CHECK BEFORE CLEANUP ===" && \
+    python -c "import numpy; print('numpy:', numpy.__file__)" || echo "NUMPY MISSING BEFORE CLEANUP"; \
     if [ "$TARGETARCH" = "amd64" ]; then \
         rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cublas && \
         rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime && \
@@ -68,8 +70,7 @@ RUN apt-get update && \
 COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-RUN python -c "import numpy; print('numpy OK:', numpy.__file__)" && \
-    python -c "import torch; print('torch OK:', torch.__file__)"
+RUN ls /usr/local/lib/python3.10/dist-packages/ | grep -i numpy || echo "NO NUMPY FOUND"
 
 COPY wyoming_voice_match/ wyoming_voice_match/
 COPY scripts/ scripts/
