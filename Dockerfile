@@ -64,6 +64,10 @@ RUN dpkg --configure -a && \
         python3 \
         libsndfile1 \
         ffmpeg \
+        libavcodec58 \
+        libavformat58 \
+        libavutil56 \
+        libswresample3 \
         libgomp1 && \
     ln -sf /usr/bin/python3 /usr/bin/python && \
     apt-get clean && \
