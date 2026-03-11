@@ -13,7 +13,7 @@ COPY requirements.txt .
 
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
-        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu121; \
+        pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu128; \
     else \
         pip install --no-cache-dir --pre torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128; \
     fi && \
