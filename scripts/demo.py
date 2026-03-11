@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import soundfile as sf
 import torchaudio
 
 from wyoming_voice_match.verify import SpeakerVerifier
@@ -114,7 +115,8 @@ def main() -> None:
 
     # Load and prepare audio
     print(f"\n  Loading audio: {input_path}")
-    signal, sample_rate = torchaudio.load(str(input_path))
+    data, sample_rate = sf.read(str(input_path), dtype="float32")
+    signal = torch.from_numpy(data).unsqueeze(0)
 
     if sample_rate != 16000:
         print(f"  Resampling: {sample_rate} Hz -> 16000 Hz")

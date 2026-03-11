@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import soundfile as sf
 import torchaudio
 from speechbrain.inference.speaker import EncoderClassifier
 
@@ -161,7 +162,8 @@ def main() -> None:
     for audio_file in audio_files:
         _LOGGER.info("Processing: %s", audio_file.name)
         try:
-            signal, sample_rate = torchaudio.load(str(audio_file))
+            data, sample_rate = sf.read(str(audio_file), dtype="float32")
+            signal = torch.from_numpy(data).unsqueeze(0)
 
             # Resample to 16kHz if needed
             if sample_rate != 16000:

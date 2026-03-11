@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import soundfile as sf
 import torchaudio
 from scipy.spatial.distance import cosine
 from speechbrain.inference.speaker import EncoderClassifier
@@ -91,7 +92,8 @@ def main() -> None:
     )
 
     # Load and process audio
-    signal, sample_rate = torchaudio.load(str(audio_path))
+    data, sample_rate = sf.read(str(audio_path), dtype="float32")
+    signal = torch.from_numpy(data).unsqueeze(0)
 
     if sample_rate != 16000:
         resampler = torchaudio.transforms.Resample(
