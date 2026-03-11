@@ -23,8 +23,8 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
         pip install --no-cache-dir --upgrade speechbrain; \
     fi && \
     pip uninstall -y triton 2>/dev/null; \
-    echo "=== NUMPY CHECK BEFORE CLEANUP ===" && \
-    python -c "import numpy; print('numpy:', numpy.__file__)" || echo "NUMPY MISSING BEFORE CLEANUP"; \
+    echo "=== DEBUG: pip list ===" && pip list && \
+    echo "=== DEBUG: python path ===" && python -c "import site; print(site.getsitepackages())" && \
     if [ "$TARGETARCH" = "amd64" ]; then \
         rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cublas && \
         rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime && \
