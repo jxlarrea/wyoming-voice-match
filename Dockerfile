@@ -31,10 +31,10 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
         rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/curand && \
         rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusolver && \
         rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusparse && \
-        rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nccl && \
+        echo "Keeping NCCL (required by libtorch_cuda.so)" && \
         rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nvjitlink && \
         cd /usr/local/lib/python3.10/dist-packages/torch/lib && \
-        rm -f libnccl* libcublas* libcublasLt* libcusolver* \
+        rm -f libcublas* libcublasLt* libcusolver* \
               libcufft* libcurand* libnvrtc* libnvJitLink* libnvfuser*; \
     fi && \
     find /usr/local/lib/python3.10/dist-packages/torch -name "*.a" -delete && \
