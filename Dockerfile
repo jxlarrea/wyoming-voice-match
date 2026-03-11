@@ -71,8 +71,10 @@ COPY wyoming_voice_match/ wyoming_voice_match/
 COPY scripts/ scripts/
 
 # Patch SpeechBrain's torchaudio backend check (list_audio_backends removed in newer torchaudio)
-RUN sed -i 's/available_backends = torchaudio.list_audio_backends()/available_backends = []/' \
-        /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py
+RUN if [ -f /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py ]; then \
+        sed -i 's/available_backends = torchaudio.list_audio_backends()/available_backends = []/' \
+            /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py; \
+    fi
 
 RUN mkdir -p /data/enrollment /data/voiceprints /data/models
 
