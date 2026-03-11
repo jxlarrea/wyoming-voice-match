@@ -18,6 +18,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
         pip install --no-cache-dir --pre torch torchaudio torchcodec --index-url https://download.pytorch.org/whl/nightly/cu128; \
     fi && \
     pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir numpy && \
     if [ "$TARGETARCH" != "amd64" ]; then \
         pip install --no-cache-dir --upgrade speechbrain; \
     fi && \
