@@ -1,7 +1,8 @@
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04 AS builder
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::AllowInsecureRepositories=true && \
+    apt-get install -y --allow-unauthenticated --no-install-recommends \
+        ca-certificates \
         python3 \
         python3-pip \
         python3-dev \
@@ -58,8 +59,8 @@ LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification"
 WORKDIR /app
 
 RUN dpkg --configure -a && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
+    apt-get update -o Acquire::AllowInsecureRepositories=true && \
+    apt-get install -y --allow-unauthenticated --no-install-recommends \
         python3 \
         libsndfile1 \
         ffmpeg \
