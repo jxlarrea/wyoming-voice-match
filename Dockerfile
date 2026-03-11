@@ -57,7 +57,8 @@ LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification"
 
 WORKDIR /app
 
-RUN apt-get update && \
+RUN dpkg --configure -a && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         python3 \
         libsndfile1 \
