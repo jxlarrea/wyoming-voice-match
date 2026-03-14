@@ -3,8 +3,8 @@
 # Use the official NVIDIA Jetson PyTorch base for JetPack 6
 FROM dustynv/l4t-pytorch:r36.2.0
 
-LABEL maintainer="Wanghley Soares Martins"
-LABEL description="Wyoming Voice Match - Jetson Orin Nano Adaptation"
+LABEL maintainer="Wyoming Voice Match"
+LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification"
 
 WORKDIR /app
 
