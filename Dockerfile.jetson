@@ -1,0 +1,44 @@
+# Use the official NVIDIA Jetson PyTorch base for JetPack 6.x (L4T 36.x)
+# This includes the correct CUDA/cuDNN/PyTorch binaries for CC 8.7
+# Use the official NVIDIA Jetson PyTorch base for JetPack 6
+FROM dustynv/l4t-pytorch:r36.2.0
+
+LABEL maintainer="Wyoming Voice Match"
+LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification"
+
+WORKDIR /app
+
+# Install system dependencies for audio and building
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsndfile1 \
+    ffmpeg \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only the requirements first to leverage Docker cache
+COPY requirements.txt .
+
+# Install dependencies using the Jetson AI Lab index for ARM64 compatibility
+RUN pip3 install --no-cache-dir \
+    --index-url https://pypi.org/simple \
+    --extra-index-url https://pypi.jetson-ai-lab.io/jp6/cu126 \
+    -r requirements.txt \
+    "numpy<2" \
+    "speechbrain"
+
+# Copy the application source code
+COPY wyoming_voice_match/ wyoming_voice_match/
+COPY scripts/ scripts/
+
+# Patch SpeechBrain's torchaudio backend check for modern torchaudio compatibility
+RUN if [ -f /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py ]; then \
+        sed -i 's/available_backends = torchaudio.list_audio_backends()/available_backends = []/' \
+            /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py; \
+    fi
+
+# Create data structures
+RUN mkdir -p /data/enrollment /data/voiceprints /data/models
+
+EXPOSE 10350
+
+ENTRYPOINT ["python3", "-m", "wyoming_voice_match"]
