@@ -194,8 +194,8 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             # be streaming, but HA's TTS response should interrupt it.
             full_buffer = bytes(self._audio_buffer)
             buffer_duration = len(full_buffer) / bytes_per_second
-            _LOGGER.debug(
-                "[%s] Early response: using %.1fs of buffered audio (not waiting for AudioStop)",
+            _LOGGER.info(
+                "[%s] Early response enabled: using %.1fs of buffered audio (not waiting for AudioStop)",
                 sid, buffer_duration,
             )
         else:
