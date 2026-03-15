@@ -43,7 +43,6 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         tag_speaker: bool = False,
         require_speaker_match: bool = True,
         save_rejected: bool = False,
-        early_response: bool = False,
         *args,
         **kwargs,
     ) -> None:
@@ -55,7 +54,6 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self.tag_speaker = tag_speaker
         self.require_speaker_match = require_speaker_match
         self.save_rejected = save_rejected
-        self.early_response = early_response
         self.rejected_dir = Path("/data/rejections")
 
         # Per-connection state
@@ -187,26 +185,14 @@ class SpeakerVerifyHandler(AsyncEventHandler):
             self._audio_rate * self._audio_width * self._audio_channels
         )
 
-        if self.early_response:
-            # Use the audio buffered so far — don't wait for AudioStop.
-            # This sends the transcript to HA immediately, which triggers
-            # the next pipeline stage (intent/TTS). The satellite may still
-            # be streaming, but HA's TTS response should interrupt it.
-            full_buffer = bytes(self._audio_buffer)
-            buffer_duration = len(full_buffer) / bytes_per_second
-            _LOGGER.info(
-                "[%s] Early response enabled: using %.1fs of buffered audio (not waiting for AudioStop)",
-                sid, buffer_duration,
-            )
-        else:
-            # Wait until the satellite sends AudioStop (stream fully ended).
-            # This ensures we capture the entire command regardless of length.
-            _LOGGER.debug("[%s] Waiting for AudioStop", sid)
-            try:
-                await asyncio.wait_for(self._audio_stopped.wait(), timeout=30.0)
-            except asyncio.TimeoutError:
-                _LOGGER.debug("[%s] AudioStop timeout (30s)", sid)
-            full_buffer = bytes(self._audio_buffer)
+        # Wait until the satellite sends AudioStop (stream fully ended).
+        # This ensures we capture the entire command regardless of length.
+        _LOGGER.debug("[%s] Waiting for AudioStop", sid)
+        try:
+            await asyncio.wait_for(self._audio_stopped.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            _LOGGER.debug("[%s] AudioStop timeout (30s)", sid)
+        full_buffer = bytes(self._audio_buffer)
             buffer_duration = len(full_buffer) / bytes_per_second
             _LOGGER.debug("[%s] Stream ended: %.1fs buffer", sid, buffer_duration)
 

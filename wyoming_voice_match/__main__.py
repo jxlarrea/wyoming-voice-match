@@ -157,13 +157,6 @@ def get_args() -> argparse.Namespace:
         default=os.environ.get("SAVE_REJECTED", "false").lower() in ("true", "1", "yes"),
         help="Save rejected audio clips and metadata to disk (default: false)",
     )
-    parser.add_argument(
-        "--early-response",
-        action="store_true",
-        default=os.environ.get("EARLY_RESPONSE", "false").lower() in ("true", "1", "yes"),
-        help="Send transcript to HA immediately after verification without waiting for AudioStop (default: false)",
-    )
-
     return parser.parse_args()
 
 
@@ -220,8 +213,7 @@ async def main() -> None:
     _LOGGER.info(
         "Speaker verifier ready — %d speaker(s) enrolled "
         "(threshold=%.2f, extraction=%.2f, device=%s, verify_window=%.1fs, "
-        "sliding_window=%.1fs/%.1fs, require_match=%s, save_rejected=%s, "
-        "early_response=%s)",
+        "sliding_window=%.1fs/%.1fs, require_match=%s, save_rejected=%s)",
         len(verifier.voiceprints),
         args.threshold,
         args.extraction_threshold,
@@ -231,7 +223,6 @@ async def main() -> None:
         args.step_seconds,
         args.require_speaker_match,
         args.save_rejected,
-        args.early_response,
     )
 
     # Build Wyoming service info
@@ -288,7 +279,6 @@ async def main() -> None:
             args.tag_speaker,
             args.require_speaker_match,
             args.save_rejected,
-            args.early_response,
         )
     )
 
