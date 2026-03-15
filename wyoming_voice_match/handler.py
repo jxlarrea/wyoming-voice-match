@@ -1,9 +1,14 @@
 """Wyoming event handler for speaker-verified ASR proxy."""
 
 import asyncio
+import io
+import json
 import logging
 import time
 import uuid
+import wave
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from wyoming.asr import Transcribe, Transcript
@@ -37,6 +42,7 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         upstream_uri: str,
         tag_speaker: bool = False,
         require_speaker_match: bool = True,
+        save_rejected: bool = False,
         *args,
         **kwargs,
     ) -> None:
@@ -47,6 +53,8 @@ class SpeakerVerifyHandler(AsyncEventHandler):
         self.upstream_uri = upstream_uri
         self.tag_speaker = tag_speaker
         self.require_speaker_match = require_speaker_match
+        self.save_rejected = save_rejected
+        self.rejected_dir = Path("/data/rejections")
 
         # Per-connection state
         self._audio_buffer = bytes()
@@ -333,6 +341,9 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 audio_duration, asr_forwarded,
             )
         else:
+            # Save rejected audio if enabled
+            self._save_rejected_audio(audio_bytes, result, verify_ms)
+
             if not self.require_speaker_match:
                 # Speaker not matched but matching not required —
                 # forward full audio without extraction
@@ -367,6 +378,64 @@ class SpeakerVerifyHandler(AsyncEventHandler):
                 )
                 await self.write_event(Transcript(text="").event())
                 self._responded = True
+
+    def _save_rejected_audio(
+        self,
+        audio_bytes: bytes,
+        result: VerificationResult,
+        verify_ms: float,
+    ) -> None:
+        """Save rejected audio as WAV with a companion JSON metadata file."""
+        if not self.save_rejected:
+            return
+
+        sid = self._session_id
+        try:
+            self.rejected_dir.mkdir(parents=True, exist_ok=True)
+
+            now = datetime.now(timezone.utc)
+            timestamp = now.strftime("%Y%m%d_%H%M%S")
+            base_name = f"rejected_{timestamp}_{sid}"
+
+            # Save WAV
+            wav_path = self.rejected_dir / f"{base_name}.wav"
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, "wb") as wf:
+                wf.setnchannels(self._audio_channels)
+                wf.setsampwidth(self._audio_width)
+                wf.setframerate(self._audio_rate)
+                wf.writeframes(audio_bytes)
+            wav_path.write_bytes(wav_buffer.getvalue())
+
+            # Save companion JSON
+            bytes_per_second = (
+                self._audio_rate * self._audio_width * self._audio_channels
+            )
+            metadata = {
+                "timestamp": now.isoformat(),
+                "session_id": sid,
+                "audio_file": f"{base_name}.wav",
+                "duration_seconds": round(len(audio_bytes) / bytes_per_second, 2),
+                "sample_rate": self._audio_rate,
+                "best_score": round(result.similarity, 4),
+                "threshold": round(result.threshold, 2),
+                "margin": round(result.threshold - result.similarity, 4),
+                "all_scores": {
+                    name: round(score, 4)
+                    for name, score in result.all_scores.items()
+                },
+                "speech_start_sec": result.speech_start_sec,
+                "speech_end_sec": result.speech_end_sec,
+            }
+            json_path = self.rejected_dir / f"{base_name}.json"
+            json_path.write_text(json.dumps(metadata, indent=2))
+
+            _LOGGER.info(
+                "[%s] Saved rejected audio to %s (%.4f < %.2f)",
+                sid, wav_path, result.similarity, result.threshold,
+            )
+        except Exception:
+            _LOGGER.exception("[%s] Failed to save rejected audio", sid)
 
     def _tag_transcript(self, transcript: str, speaker_name: Optional[str]) -> str:
         """Prepend [speaker_name] to transcript if tagging is enabled."""

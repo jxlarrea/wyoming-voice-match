@@ -21,6 +21,7 @@ A [Wyoming protocol](https://github.com/OHF-Voice/wyoming) ASR proxy that verifi
   - [Tuning the Threshold](#tuning-the-threshold)
   - [Noisy Environment Tuning](#noisy-environment-tuning)
   - [Speaker Tagging](#speaker-tagging)
+  - [Rejected Audio Logging](#rejected-audio-logging)
   - [Re-enrollment](#re-enrollment)
   - [Demo: See Extraction in Action](#demo-see-extraction-in-action)
 - [Performance](#performance)
@@ -303,6 +304,7 @@ All configuration is done in the `environment` section of `docker-compose.yml`:
 | `EXTRACTION_THRESHOLD` | `0.25` | Cosine similarity threshold for speaker extraction — regions below this are discarded |
 | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded to ASR instead of being rejected — enrolled speakers still get verification and extraction |
 | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts (useful for LLM-based conversation agents) |
+| `SAVE_REJECTED` | `false` | Save rejected audio clips and metadata to `/data/rejections/` for review and re-enrollment |
 | `LOG_LEVEL` | `DEBUG` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `DEVICE` | `cuda` | Inference device (`cuda` or `cpu`). Auto-detects: falls back to CPU if CUDA is unavailable |
 | `HF_HOME` | `/data/hf_cache` | HuggingFace cache directory for model downloads (persisted via volume) |
@@ -388,6 +390,67 @@ When `TAG_SPEAKER=true` is set, the verified speaker's name is prepended to the 
 This is useful when using an LLM-based conversation agent (e.g., OpenAI, Claude, or a custom integration) - the LLM can use the speaker's identity to personalize responses or trigger per-user automations. This setting has no effect on rejected speakers (empty transcripts).
 
 > **Note:** If you're using Home Assistant's built-in intent-based assistant, leave this disabled. The `[speaker_name]` prefix will interfere with intent matching. This feature is designed for LLM-based conversation agents that can parse the tag naturally.
+
+### Rejected Audio Logging
+
+When `SAVE_REJECTED=true` is set, every rejected audio clip is saved to `/data/rejections/` with a companion JSON metadata file. This is useful for harvesting voice samples from family members or guests for future enrollment without requiring a dedicated recording session.
+
+```yaml
+    environment:
+      - SAVE_REJECTED=true
+```
+
+Each rejection produces two files:
+
+- **WAV file**: The full audio clip (e.g., `rejected_20260315_143045_a1b2c3d4.wav`)
+- **JSON file**: Rejection metadata (e.g., `rejected_20260315_143045_a1b2c3d4.json`)
+
+**Example JSON — rejected with speaker scores (near-miss or known voice at a distance):**
+
+```json
+{
+  "timestamp": "2026-03-15T14:30:45.123456+00:00",
+  "session_id": "a1b2c3d4",
+  "audio_file": "rejected_20260315_143045_a1b2c3d4.wav",
+  "duration_seconds": 4.2,
+  "sample_rate": 16000,
+  "best_score": 0.1847,
+  "threshold": 0.30,
+  "margin": 0.1153,
+  "all_scores": {
+    "jx": 0.1847,
+    "jane": 0.0921
+  },
+  "speech_start_sec": 1.2,
+  "speech_end_sec": 3.4
+}
+```
+
+**Example JSON — rejected with no speaker detected (e.g., TV, background noise):**
+
+```json
+{
+  "timestamp": "2026-03-15T14:30:45.123456+00:00",
+  "session_id": "a1b2c3d4",
+  "audio_file": "rejected_20260315_143045_a1b2c3d4.wav",
+  "duration_seconds": 4.2,
+  "sample_rate": 16000,
+  "best_score": 0.0,
+  "threshold": 0.30,
+  "margin": 0.30,
+  "all_scores": {},
+  "speech_start_sec": null,
+  "speech_end_sec": null
+}
+```
+
+The `margin` field (`threshold - best_score`) is useful for triaging: sort by lowest margin to find near-misses that are good candidates for enrollment. To enroll a rejected clip, move it to the speaker's enrollment folder and re-run enrollment:
+
+```bash
+mv data/rejections/rejected_20260315_143045_a1b2c3d4.wav data/enrollment/john/
+docker compose run --rm --entrypoint python wyoming-voice-match -m scripts.enroll --speaker john
+docker compose restart wyoming-voice-match
+```
 
 ### Re-enrollment
 

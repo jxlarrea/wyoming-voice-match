@@ -194,6 +194,7 @@ All arguments have environment variable fallbacks for Docker configuration:
 | `--extraction-threshold` | `EXTRACTION_THRESHOLD` | `0.25` | Extraction similarity threshold |
 | `--require-speaker-match` | `REQUIRE_SPEAKER_MATCH` | `true` | When `false`, unmatched audio is forwarded instead of rejected — enrolled speakers still get extraction |
 | `--tag-speaker` | `TAG_SPEAKER` | `false` | Prepend `[speaker_name]` to transcripts |
+| `--save-rejected` | `SAVE_REJECTED` | `false` | Save rejected audio clips and metadata to `/data/rejections/` |
 | `--debug` | `LOG_LEVEL=DEBUG` | `INFO` | Enable debug logging |
 | `--device` | `DEVICE` | `cuda` | `cuda` or `cpu` (auto-detects, falls back to cpu) |
 | `--voiceprints-dir` | `VOICEPRINTS_DIR` | `/data/voiceprints` | Directory with .npy voiceprints |
@@ -306,8 +307,18 @@ Fallback path when early verification hasn't responded (short audio or early ver
 3. If no cache → first-time verification on full buffer
 4. If matched and audio > 3s → run speaker extraction, forward extracted audio to ASR, apply speaker tagging if enabled
 5. If matched and audio ≤ 3s → forward full buffer to ASR (too short for meaningful extraction)
-6. If rejected and `require_speaker_match` is true → return empty transcript
-7. If rejected and `require_speaker_match` is false → forward full buffer unmodified to ASR
+6. If rejected → save audio and metadata to `/data/rejections/` if `save_rejected` is enabled (via `_save_rejected_audio()`)
+7. If rejected and `require_speaker_match` is true → return empty transcript
+8. If rejected and `require_speaker_match` is false → forward full buffer unmodified to ASR
+
+### _save_rejected_audio(audio_bytes, result, verify_ms)
+
+Called when `save_rejected` is enabled and a speaker is not matched. Saves two files to `/data/rejections/`:
+
+1. **WAV file** (`rejected_{timestamp}_{session_id}.wav`): Full audio clip written using the `wave` module with the connection's sample rate, width, and channels
+2. **JSON file** (`rejected_{timestamp}_{session_id}.json`): Companion metadata containing timestamp, session ID, audio duration, best similarity score, threshold, margin (threshold - best_score), per-speaker scores, and speech segment timing
+
+The directory is created automatically on first use (`mkdir -p` equivalent). Errors during save are logged but do not interrupt the pipeline.
 
 ### _forward_to_upstream(audio_bytes: bytes) → str
 
