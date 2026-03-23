@@ -3,7 +3,10 @@
 [![version](https://img.shields.io/github/v/release/jxlarrea/wyoming-voice-match?style=for-the-badge&color=orange)](https://github.com/jxlarrea/wyoming-voice-match/releases)
 [![Stars](https://img.shields.io/github/stars/jxlarrea/wyoming-voice-match?style=for-the-badge&color=yellow)](https://github.com/jxlarrea/wyoming-voice-match)
 [![GHCR](https://img.shields.io/badge/GHCR-Container-blue?style=for-the-badge&logo=docker&logoColor=green)](https://github.com/jxlarrea/wyoming-voice-match/pkgs/container/wyoming-voice-match)
+![Docker Pulls](https://img.shields.io/docker/pulls/jxlarrea/wyoming-voice-match?style=for-the-badge&color=purple)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/jxlarrea/wyoming-voice-match/docker-publish.yml?style=for-the-badge)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/jxlarrea)
+
 
 A [Wyoming protocol](https://github.com/OHF-Voice/wyoming) ASR proxy that verifies speaker identity and extracts your voice from background noise before forwarding audio to a downstream speech-to-text service. Designed for [Home Assistant](https://www.home-assistant.io/) voice pipelines to prevent false activations from TVs, radios, and other people - and to deliver clean transcripts even in noisy environments.
 
