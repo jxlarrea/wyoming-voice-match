@@ -119,7 +119,7 @@ flowchart LR
 
 A running Wyoming-compatible ASR service such as [wyoming-faster-whisper](https://github.com/rhasspy/wyoming-faster-whisper) or [wyoming-onnx-asr](https://github.com/tboby/wyoming-onnx-asr). Wyoming Voice Match sits in front of this service as a proxy and forwards verified, cleaned audio to it.
 
-The Quick Start guide below uses Docker and Docker Compose for deployment. An NVIDIA GPU is recommended for fast inference (~5-25ms verification) but not required — CPU inference works at ~200-500ms. The scripts can also be run directly with Python 3.10+ and the dependencies listed in `requirements.txt`.
+The Quick Start guide below uses Docker and Docker Compose for deployment. An NVIDIA GPU is recommended for fast inference (~5-25ms verification) but not required — CPU inference works at ~200-500ms. Use the `pascal-gpu` image for Pascal-era NVIDIA GPUs such as GTX 10xx cards. The scripts can also be run directly with Python 3.10+ and the dependencies listed in `requirements.txt`.
 
 ## Quick Start
 
@@ -138,6 +138,34 @@ mkdir -p data/enrollment
 services:
   wyoming-voice-match:
     image: ghcr.io/jxlarrea/wyoming-voice-match:latest
+    container_name: wyoming-voice-match
+    restart: unless-stopped
+    ports:
+      - "10350:10350"
+    volumes:
+      - ./data:/data
+    environment:
+      - UPSTREAM_URI=tcp://wyoming-faster-whisper:10300
+      - LISTEN_URI=tcp://0.0.0.0:10350
+      - VERIFY_THRESHOLD=0.30
+      - EXTRACTION_THRESHOLD=0.25
+      - HF_HOME=/data/hf_cache
+      - LOG_LEVEL=DEBUG
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+**Pascal GPU (GTX 10xx / Quadro P / Tesla P):**
+
+```yaml
+services:
+  wyoming-voice-match:
+    image: ghcr.io/jxlarrea/wyoming-voice-match:pascal-gpu
     container_name: wyoming-voice-match
     restart: unless-stopped
     ports:

@@ -1,0 +1,83 @@
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04 AS builder
+
+RUN apt-get update -o Acquire::AllowInsecureRepositories=true && \
+    apt-get install -y --allow-unauthenticated --no-install-recommends \
+        ca-certificates \
+        python3 \
+        python3-pip \
+        python3-dev \
+        libsndfile1 && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121 && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir numpy && \
+    pip uninstall -y triton 2>/dev/null; \
+    echo "=== DEBUG: pip list ===" && pip list && \
+    echo "=== DEBUG: python path ===" && python -c "import site; print(site.getsitepackages())" && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cublas && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cuda_nvrtc && \
+    echo "Keeping cuDNN from the PyTorch wheel (CUDA 12.1 base includes cuDNN 8)" && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cufft && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/curand && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusolver && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cusparse && \
+    echo "Keeping NCCL (required by libtorch_cuda.so)" && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/nvjitlink && \
+    cd /usr/local/lib/python3.10/dist-packages/torch/lib && \
+    rm -f libcublas* libcublasLt* libcusolver* \
+          libcufft* libcurand* libnvrtc* libnvJitLink* libnvfuser*; \
+    find /usr/local/lib/python3.10/dist-packages/torch -name "*.a" -delete && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/torch/include && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/torch/share && \
+    pip uninstall -y sympy networkx 2>/dev/null; \
+    rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/recipes && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/speechbrain/tests && \
+    find /usr/local/lib/python3.10/dist-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; \
+    echo "Cleanup complete"
+
+# --- Runtime stage ---
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+LABEL maintainer="Wyoming Voice Match"
+LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification (Pascal GPU)"
+
+WORKDIR /app
+
+RUN dpkg --configure -a && \
+    apt-get update -o Acquire::AllowInsecureRepositories=true && \
+    apt-get install -y --allow-unauthenticated --no-install-recommends \
+        python3 \
+        libsndfile1 \
+        ffmpeg \
+        libavcodec58 \
+        libavformat58 \
+        libavutil56 \
+        libswresample3 \
+        libgomp1 && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+RUN ls /usr/local/lib/python3.10/dist-packages/ | grep -i numpy || echo "NO NUMPY FOUND"
+
+COPY wyoming_voice_match/ wyoming_voice_match/
+COPY scripts/ scripts/
+
+# Patch SpeechBrain's torchaudio backend check (list_audio_backends removed in newer torchaudio)
+RUN if [ -f /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py ]; then \
+        sed -i 's/available_backends = torchaudio.list_audio_backends()/available_backends = []/' \
+            /usr/local/lib/python3.10/dist-packages/speechbrain/utils/torch_audio_backend.py; \
+    fi
+
+RUN mkdir -p /data/enrollment /data/voiceprints /data/models
+
+EXPOSE 10350
+ENTRYPOINT ["python", "-m", "wyoming_voice_match"]
