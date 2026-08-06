@@ -42,11 +42,13 @@ wyoming-voice-match/
 │   └── test_verify.py            # Threshold tuning CLI
 ├── tools/
 │   └── record_samples.ps1        # Windows PowerShell recording helper
-├── Dockerfile                    # GPU image (CUDA 12.4 + cuDNN, multi-stage)
+├── Dockerfile                    # GPU image (CUDA 12.8 + cuDNN, multi-stage)
+├── Dockerfile.pascal             # Pascal GPU image (CUDA 12.1 + cuDNN, multi-stage)
 ├── Dockerfile.cpu                # CPU image (python:3.11-slim)
 ├── docker-compose.yml            # GPU compose config
+├── docker-compose.pascal.yml     # Pascal GPU compose config
 ├── docker-compose.cpu.yml        # CPU compose config
-├── requirements.txt              # GPU Python deps (torch installed separately via cu121 index)
+├── requirements.txt              # GPU Python deps (torch installed separately in Dockerfiles)
 ├── requirements.cpu.txt          # CPU Python deps (torch from default PyPI)
 ├── LICENSE                       # MIT
 ├── README.md                     # User-facing documentation
@@ -65,7 +67,7 @@ The solution has two parts:
 
 ### Python Packages
 
-**requirements.txt** (GPU - torch/torchaudio installed separately from `https://download.pytorch.org/whl/cu121`):
+**requirements.txt** (GPU - torch/torchaudio installed separately in Dockerfiles):
 ```
 wyoming==1.8.0
 speechbrain>=1.0.0
@@ -506,9 +508,9 @@ Debug logging is always enabled so the output shows the complete region-by-regio
 
 Multi-stage build to minimize image size (~5GB):
 
-**Stage 1 (builder):** `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04`
+**Stage 1 (builder):** `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04`
 - Installs python3, python3-pip, python3-dev, libsndfile1
-- Installs torch and torchaudio from `https://download.pytorch.org/whl/cu121`
+- Installs torch and torchaudio from `https://download.pytorch.org/whl/cu128`
 - Installs remaining requirements from requirements.txt
 - Cleanup step removes ~2GB of redundant files:
   - Triton (~600MB, not needed for inference)
@@ -519,12 +521,26 @@ Multi-stage build to minimize image size (~5GB):
   - SpeechBrain recipes and tests directories
   - All `__pycache__` directories
 
-**Stage 2 (runtime):** `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04`
+**Stage 2 (runtime):** `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04`
 - Installs python3, libsndfile1, ffmpeg, libgomp1
 - Copies installed Python packages from builder
 - Copies application code (wyoming_voice_match/ and scripts/)
 - Creates /data directory structure (enrollment, voiceprints, models)
 - Entrypoint: `python -m wyoming_voice_match`
+
+### Pascal GPU Image (Dockerfile.pascal)
+
+Multi-stage build for Pascal-era NVIDIA GPUs such as GTX 10xx, Quadro P, and Tesla P cards:
+
+**Stage 1 (builder):** `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04`
+- Installs python3, python3-pip, python3-dev, libsndfile1
+- Pins `torch==2.5.1` and `torchaudio==2.5.1` from `https://download.pytorch.org/whl/cu121`
+- Installs remaining requirements from requirements.txt
+- Uses the same cleanup pattern as the default GPU image
+
+**Stage 2 (runtime):** `nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04`
+- Same runtime packages, application code, /data directory structure, and entrypoint as the default GPU image
+- Published as `ghcr.io/jxlarrea/wyoming-voice-match:pascal-gpu`
 
 ### CPU Image (Dockerfile.cpu)
 
@@ -901,7 +917,7 @@ See scripts/enroll_record.py source in the main project. The complete file is in
 ### Dockerfile
 
 ```dockerfile
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04 AS builder
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -914,7 +930,7 @@ RUN apt-get update && \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir \
-        torch torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+        torch torchaudio --index-url https://download.pytorch.org/whl/cu128 && \
     pip install --no-cache-dir -r requirements.txt && \
     pip uninstall -y triton 2>/dev/null; \
     rm -rf /usr/local/lib/python3.10/dist-packages/nvidia/cublas && \
@@ -939,7 +955,7 @@ RUN pip install --no-cache-dir \
     find /usr/local/lib/python3.10/dist-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; \
     echo "Cleanup complete"
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 LABEL maintainer="Wyoming Voice Match"
 LABEL description="Wyoming ASR proxy with ECAPA-TDNN speaker verification"
